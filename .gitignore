@@ -3,3 +3,4 @@
 .python-version
 *.mypy_cache
 *activity.log*
+*saved_models*
