@@ -68,7 +68,6 @@ def chunk_compute_embeddings(
             show_progress_bar=False,
         )
         # Weighted pooling, gives best results so far
-        # chunk_lengths = [len(chunk) for chunk in chunks]
         chunk_lengths = [len(model.tokenizer.tokenize(chunk)) for chunk in chunks]
         weights = np.array(chunk_lengths) / sum(chunk_lengths)
         text_embedding = np.average(chunk_embeddings, axis=0, weights=weights)
@@ -142,8 +141,7 @@ async def get_read_articles_embeddings(model):
     logger.debug(f"Collected {len(articles)} articles.")
 
     logger.debug("Computing embeddings for articles")
-    # embeddings = compute_embeddings(model, prepare_articles_text(articles))
-    embeddings = chunk_compute_embeddings(model, prepare_articles_text(articles))
+    embeddings = compute_embeddings(model, prepare_articles_text(articles))
     logger.debug(f"Computed embeddings for {len(embeddings)} articles.")
 
     save_embeddings(embeddings_path, embeddings)
@@ -163,9 +161,9 @@ async def get_unread_articles_embeddings(model):
     logger.debug(f"Collected {len(unlabeled_articles)} unread articles.")
 
     logger.debug("Computing embeddings for unread articles")
-    # unlabeled_embeddings = compute_embeddings(
-    unlabeled_embeddings = chunk_compute_embeddings(
-        model, prepare_articles_text(unlabeled_articles)
+    unlabeled_embeddings = compute_embeddings(
+        model,
+        prepare_articles_text(unlabeled_articles),
     )
     logger.debug(
         f"Computed embeddings for {len(unlabeled_embeddings)} unread articles."
@@ -186,10 +184,7 @@ async def get_good_articles_embeddings(model):
     good_articles = await dr.get_sample_good()
     logger.debug(f"Collected {len(good_articles)} good articles.")
     logger.debug("Computing embeddings for good articles")
-    # good_embeddings = compute_embeddings(model, prepare_articles_text(good_articles))
-    good_embeddings = chunk_compute_embeddings(
-        model, prepare_articles_text(good_articles)
-    )
+    good_embeddings = compute_embeddings(model, prepare_articles_text(good_articles))
     logger.debug(f"Computed embeddings for {len(good_embeddings)} good articles.")
     save_embeddings(embeddings_path, good_embeddings)
 
@@ -208,9 +203,9 @@ async def get_not_good_articles_embeddings(model):
     logger.debug(f"Collected {len(not_good_articles)} not good articles.")
 
     logger.debug("Computing embeddings for not good articles")
-    # not_good_embeddings = compute_embeddings(
-    not_good_embeddings = chunk_compute_embeddings(
-        model, prepare_articles_text(not_good_articles)
+    not_good_embeddings = compute_embeddings(
+        model,
+        prepare_articles_text(not_good_articles),
     )
     logger.debug(
         f"Computed embeddings for {len(not_good_embeddings)} not good articles."
@@ -435,10 +430,10 @@ def logistic_regression_bagging(X, y, embeddings, unlabeled_embeddings):
 
 def tuned_logistic_regression_bagging(X, y, embeddings, unlabeled_embeddings):
     param_grid = {
-        "estimator__C": [0.1, 0.5, 1, 5, 10],
+        "estimator__C": [0.5, 1, 1.5, 2, 3, 4, 5, 10],
         "estimator__penalty": ["l2"],
         "estimator__solver": ["lbfgs"],
-        "estimator__max_iter": [50, 100, 150, 200],
+        "estimator__max_iter": [50, 75, 100, 125, 150, 200],
         "n_estimators": [5, 10, 15, 20, 25, 30, 35],
     }
 
