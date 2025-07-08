@@ -5,3 +5,6 @@
 *activity.log*
 *saved_models*
 token.py
+
+*.pkl
+*.npy
