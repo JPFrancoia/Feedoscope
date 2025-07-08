@@ -20,9 +20,9 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.svm import SVC, OneClassSVM
 from xgboost import XGBClassifier
 
+from feedoscope import config
 from feedoscope.data_registry import data_registry as dr
-
-from .mlr import ModifiedLogisticRegression
+from feedoscope.mlr import ModifiedLogisticRegression
 
 logger = logging.getLogger(__name__)
 
@@ -532,5 +532,5 @@ def tuned_xgboost_bagging(X, y, embeddings, unlabeled_embeddings):
 
 
 if __name__ == "__main__":
-    init_logging("dev_logging.conf")
+    init_logging(config.LOGGING_CONFIG)
     asyncio.run(main())
