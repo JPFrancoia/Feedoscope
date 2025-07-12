@@ -1,0 +1,8 @@
+*.venv*
+*.mypy_cache*
+*.envrc*
+*.env*
+*.log
+*__pycache__*
+.git
+*.ruff_cache*
