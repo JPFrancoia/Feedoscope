@@ -28,4 +28,6 @@ group by
     e.author,
     e.date_entered,
     ue.last_read
-limit 5000;
+order by
+    e.id desc;
+

@@ -30,5 +30,7 @@ group by
     e.author,
     e.date_entered,
     ue.last_read
+order by
+    e.id desc
 limit 7000;
 
