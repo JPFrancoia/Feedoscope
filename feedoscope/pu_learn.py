@@ -2,33 +2,37 @@ import asyncio
 import logging
 import os
 
-import joblib
-import numpy as np
 from bs4 import BeautifulSoup
 from cleantext import clean
-from custom_logging import init_logging
-from pulearn import (BaggingPuClassifier, ElkanotoPuClassifier,
-                     WeightedElkanotoPuClassifier)
+import joblib
+import numpy as np
+from pulearn import (
+    BaggingPuClassifier,
+    ElkanotoPuClassifier,
+    WeightedElkanotoPuClassifier,
+)
 from sentence_transformers import SentenceTransformer
-from sklearn.ensemble import (HistGradientBoostingClassifier,
-                              RandomForestClassifier)
+from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (average_precision_score, f1_score, log_loss,
-                             precision_score, recall_score, roc_auc_score)
+from sklearn.metrics import (
+    average_precision_score,
+    f1_score,
+    log_loss,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 from sklearn.model_selection import RandomizedSearchCV
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.svm import SVC, OneClassSVM
 from xgboost import XGBClassifier
 
+from custom_logging import init_logging
 from feedoscope import config
 from feedoscope.data_registry import data_registry as dr
 from feedoscope.mlr import ModifiedLogisticRegression
 
 logger = logging.getLogger(__name__)
-
-
-MODEL_NAME = "all-MiniLM-L12-v2"
-# MODEL_NAME = "all-MiniLM-L6-v2"
 
 
 def normalize_scores(scores):
@@ -130,14 +134,14 @@ def tune_pu_estimator(pu_estimator, X, y, param_grid):
 
 async def get_read_articles_embeddings(model):
 
-    embeddings_path = f"embeddings_{MODEL_NAME.replace('/', '-')}.npy"
+    embeddings_path = f"embeddings_{config.MODEL_NAME.replace('/', '-')}.npy"
     if os.path.exists(embeddings_path):
         logger.debug("Loading embeddings from file")
         embeddings = load_embeddings(embeddings_path)
         return embeddings
 
     logger.debug("Collecting articles from the database")
-    articles = await dr.get_articles()
+    articles = await dr.get_read_articles_training()
     logger.debug(f"Collected {len(articles)} articles.")
 
     logger.debug("Computing embeddings for articles")
@@ -150,14 +154,14 @@ async def get_read_articles_embeddings(model):
 
 
 async def get_unread_articles_embeddings(model):
-    embeddings_path = f"embeddings_unread_{MODEL_NAME.replace('/', '-')}.npy"
+    embeddings_path = f"embeddings_unread_{config.MODEL_NAME.replace('/', '-')}.npy"
     if os.path.exists(embeddings_path):
         logger.debug("Loading unread articles embeddings from file")
         embeddings = load_embeddings(embeddings_path)
         return embeddings
 
     logger.debug("Collecting unread articles from the database")
-    unlabeled_articles = await dr.get_unread_articles()
+    unlabeled_articles = await dr.get_unread_articles_training()
     logger.debug(f"Collected {len(unlabeled_articles)} unread articles.")
 
     logger.debug("Computing embeddings for unread articles")
@@ -175,7 +179,7 @@ async def get_unread_articles_embeddings(model):
 
 
 async def get_good_articles_embeddings(model):
-    embeddings_path = f"embeddings_good_{MODEL_NAME.replace('/', '-')}.npy"
+    embeddings_path = f"embeddings_good_{config.MODEL_NAME.replace('/', '-')}.npy"
     if os.path.exists(embeddings_path):
         logger.debug("Loading good articles embeddings from file")
         embeddings = load_embeddings(embeddings_path)
@@ -192,7 +196,7 @@ async def get_good_articles_embeddings(model):
 
 
 async def get_not_good_articles_embeddings(model):
-    embeddings_path = f"embeddings_not_good_{MODEL_NAME.replace('/', '-')}.npy"
+    embeddings_path = f"embeddings_not_good_{config.MODEL_NAME.replace('/', '-')}.npy"
     if os.path.exists(embeddings_path):
         logger.debug("Loading not good articles embeddings from file")
         embeddings = load_embeddings(embeddings_path)
@@ -219,7 +223,7 @@ async def get_not_good_articles_embeddings(model):
 async def main() -> None:
 
     logger.debug("Loading SentenceTransformer model")
-    model = SentenceTransformer(MODEL_NAME, trust_remote_code=True, device="cpu")
+    model = SentenceTransformer(config.MODEL_NAME, trust_remote_code=True, device="cpu")
     logger.debug("Model loaded successfully.")
 
     await dr.global_pool.open(wait=True)
@@ -265,7 +269,9 @@ async def main() -> None:
 
         logger.debug(f"Fitting PU classifier {mod_name}")
 
-        model_path = f"saved_models/{mod_name}_{MODEL_NAME.replace('/', '-')}.pkl"
+        model_path = (
+            f"saved_models/{mod_name}_{config.MODEL_NAME.replace('/', '-')}.pkl"
+        )
 
         if os.path.exists(model_path):
             logger.debug(f"Loading existing model from {model_path}")

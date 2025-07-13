@@ -202,6 +202,7 @@ dependencies = [
     { name = "psycopg" },
     { name = "psycopg-pool" },
     { name = "python-json-logger" },
+    { name = "sentence-transformers" },
 ]
 
 [package.dev-dependencies]
@@ -216,7 +217,6 @@ dev = [
 train = [
     { name = "pandas" },
     { name = "pulearn" },
-    { name = "sentence-transformers" },
     { name = "transformers", extra = ["torch"] },
     { name = "xgboost" },
 ]
@@ -229,6 +229,7 @@ requires-dist = [
     { name = "psycopg", specifier = ">=3.2.9,<4.0.0" },
     { name = "psycopg-pool", specifier = ">=3.2.6,<4.0.0" },
     { name = "python-json-logger", specifier = ">=3.3.0,<4.0.0" },
+    { name = "sentence-transformers", specifier = ">=4.1.0,<5.0.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -243,7 +244,6 @@ dev = [
 train = [
     { name = "pandas", specifier = ">=2.3.1" },
     { name = "pulearn", specifier = ">=0.0.11,<0.0.12" },
-    { name = "sentence-transformers", specifier = ">=4.1.0,<5.0.0" },
     { name = "transformers", extras = ["torch"], specifier = ">=4.53.0,<5.0.0" },
     { name = "xgboost", specifier = ">=3.0.2,<4.0.0" },
 ]
