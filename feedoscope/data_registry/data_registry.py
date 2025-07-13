@@ -147,3 +147,29 @@ async def get_sample_not_good() -> list[dict[str, Any]]:
         data = await cur.fetchall()
 
     return data
+
+
+async def get_previous_days_unread_articles(number_of_days: int = 7) -> list[dict[str, Any]]:
+    """Get unread articles from the previous X days.
+
+    This is used to fetch articles that are not read yet, but are still
+    within the last X days.
+    Only articles that are unread AND with a score of 0 are considered.
+
+    Returns:
+        A list of unread articles from the previous X days.
+
+    """
+    query = _get_query_from_file("get_previous_days_unread_articles.sql")
+
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(
+            query,
+            {"number_of_days": number_of_days},
+        )
+        data = await cur.fetchall()
+
+    return data
+
+
+# TODO: create an Article model

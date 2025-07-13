@@ -2,18 +2,9 @@ import asyncio
 import logging
 import os
 
-from bs4 import BeautifulSoup
-from cleantext import clean
 import joblib
 import numpy as np
-from pulearn import (
-    BaggingPuClassifier,
-    ElkanotoPuClassifier,
-    WeightedElkanotoPuClassifier,
-)
 from sentence_transformers import SentenceTransformer
-from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     average_precision_score,
     f1_score,
@@ -22,39 +13,12 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
-from sklearn.model_selection import RandomizedSearchCV
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.svm import SVC, OneClassSVM
-from xgboost import XGBClassifier
 
 from custom_logging import init_logging
-from feedoscope import config
+from feedoscope import config, models, utils
 from feedoscope.data_registry import data_registry as dr
-from feedoscope.mlr import ModifiedLogisticRegression
 
 logger = logging.getLogger(__name__)
-
-
-def normalize_scores(scores):
-    scaler = MinMaxScaler()
-    return scaler.fit_transform(scores.reshape(-1, 1)).flatten()
-
-
-def strip_html_keep_text(html: str) -> str:
-    soup = BeautifulSoup(html, "html.parser")
-    text = soup.get_text(separator=" ", strip=True)
-    return " ".join(text.split())
-
-
-def compute_embeddings(model, texts: list[str]):
-    embeddings = model.encode(
-        texts,
-        show_progress_bar=True,
-        normalize_embeddings=True,
-        convert_to_numpy=True,
-        truncate=True,
-    )
-    return embeddings
 
 
 def chunk_compute_embeddings(
@@ -80,17 +44,6 @@ def chunk_compute_embeddings(
     return np.vstack(all_embeddings)
 
 
-def prepare_articles_text(articles) -> list[str]:
-    texts = []
-    for a in articles:
-        text = clean(
-            strip_html_keep_text(f"{a['feed_name']} {a['title']} {a['content']}")
-        )
-        texts.append(text)
-
-    return texts
-
-
 def chunk_text(text, tokenizer, max_tokens):
     tokens = tokenizer.tokenize(text)
     chunks = []
@@ -100,44 +53,12 @@ def chunk_text(text, tokenizer, max_tokens):
     return chunks
 
 
-def save_embeddings(filepath, embeddings):
-    np.save(filepath, embeddings)
-
-
-def load_embeddings(filepath):
-    return np.load(filepath)
-
-
-def tune_pu_estimator(pu_estimator, X, y, param_grid):
-    # Set up grid search
-    # grid_search = GridSearchCV(
-    grid_search = RandomizedSearchCV(
-        pu_estimator,
-        param_grid,
-        scoring="average_precision",  # better for ranking tasks
-        cv=4,
-        n_jobs=10,
-        verbose=3,
-        n_iter=10,
-    )
-
-    grid_search.fit(X, y)
-
-    logger.debug(f"Best parameters: {grid_search.best_params_}")
-    logger.debug(f"Best score: {grid_search.best_score_}")
-
-    # Use the best estimator for further predictions
-    pu_estimator = grid_search.best_estimator_
-
-    return pu_estimator
-
-
 async def get_read_articles_embeddings(model):
 
-    embeddings_path = f"embeddings_{config.MODEL_NAME.replace('/', '-')}.npy"
+    embeddings_path = f"embeddings_{config.EMBEDDINGS_MODEL_NAME.replace('/', '-')}.npy"
     if os.path.exists(embeddings_path):
         logger.debug("Loading embeddings from file")
-        embeddings = load_embeddings(embeddings_path)
+        embeddings = utils.load_embeddings(embeddings_path)
         return embeddings
 
     logger.debug("Collecting articles from the database")
@@ -145,19 +66,19 @@ async def get_read_articles_embeddings(model):
     logger.debug(f"Collected {len(articles)} articles.")
 
     logger.debug("Computing embeddings for articles")
-    embeddings = compute_embeddings(model, prepare_articles_text(articles))
+    embeddings = utils.compute_embeddings(model, utils.prepare_articles_text(articles))
     logger.debug(f"Computed embeddings for {len(embeddings)} articles.")
 
-    save_embeddings(embeddings_path, embeddings)
+    utils.save_embeddings(embeddings_path, embeddings)
 
     return embeddings
 
 
 async def get_unread_articles_embeddings(model):
-    embeddings_path = f"embeddings_unread_{config.MODEL_NAME.replace('/', '-')}.npy"
+    embeddings_path = f"embeddings_unread_{config.EMBEDDINGS_MODEL_NAME.replace('/', '-')}.npy"
     if os.path.exists(embeddings_path):
         logger.debug("Loading unread articles embeddings from file")
-        embeddings = load_embeddings(embeddings_path)
+        embeddings = utils.load_embeddings(embeddings_path)
         return embeddings
 
     logger.debug("Collecting unread articles from the database")
@@ -165,41 +86,43 @@ async def get_unread_articles_embeddings(model):
     logger.debug(f"Collected {len(unlabeled_articles)} unread articles.")
 
     logger.debug("Computing embeddings for unread articles")
-    unlabeled_embeddings = compute_embeddings(
+    unlabeled_embeddings = utils.compute_embeddings(
         model,
-        prepare_articles_text(unlabeled_articles),
+        utils.prepare_articles_text(unlabeled_articles),
     )
     logger.debug(
         f"Computed embeddings for {len(unlabeled_embeddings)} unread articles."
     )
 
-    save_embeddings(embeddings_path, unlabeled_embeddings)
+    utils.save_embeddings(embeddings_path, unlabeled_embeddings)
 
     return unlabeled_embeddings
 
 
 async def get_good_articles_embeddings(model):
-    embeddings_path = f"embeddings_good_{config.MODEL_NAME.replace('/', '-')}.npy"
+    embeddings_path = f"embeddings_good_{config.EMBEDDINGS_MODEL_NAME.replace('/', '-')}.npy"
     if os.path.exists(embeddings_path):
         logger.debug("Loading good articles embeddings from file")
-        embeddings = load_embeddings(embeddings_path)
+        embeddings = utils.load_embeddings(embeddings_path)
         return embeddings
     logger.debug("Collecting good articles from the database")
     good_articles = await dr.get_sample_good()
     logger.debug(f"Collected {len(good_articles)} good articles.")
     logger.debug("Computing embeddings for good articles")
-    good_embeddings = compute_embeddings(model, prepare_articles_text(good_articles))
+    good_embeddings = utils.compute_embeddings(
+        model, utils.prepare_articles_text(good_articles)
+    )
     logger.debug(f"Computed embeddings for {len(good_embeddings)} good articles.")
-    save_embeddings(embeddings_path, good_embeddings)
+    utils.save_embeddings(embeddings_path, good_embeddings)
 
     return good_embeddings
 
 
 async def get_not_good_articles_embeddings(model):
-    embeddings_path = f"embeddings_not_good_{config.MODEL_NAME.replace('/', '-')}.npy"
+    embeddings_path = f"embeddings_not_good_{config.EMBEDDINGS_MODEL_NAME.replace('/', '-')}.npy"
     if os.path.exists(embeddings_path):
         logger.debug("Loading not good articles embeddings from file")
-        embeddings = load_embeddings(embeddings_path)
+        embeddings = utils.load_embeddings(embeddings_path)
         return embeddings
 
     logger.debug("Collecting not good articles from the database")
@@ -207,15 +130,15 @@ async def get_not_good_articles_embeddings(model):
     logger.debug(f"Collected {len(not_good_articles)} not good articles.")
 
     logger.debug("Computing embeddings for not good articles")
-    not_good_embeddings = compute_embeddings(
+    not_good_embeddings = utils.compute_embeddings(
         model,
-        prepare_articles_text(not_good_articles),
+        utils.prepare_articles_text(not_good_articles),
     )
     logger.debug(
         f"Computed embeddings for {len(not_good_embeddings)} not good articles."
     )
 
-    save_embeddings(embeddings_path, not_good_embeddings)
+    utils.save_embeddings(embeddings_path, not_good_embeddings)
 
     return not_good_embeddings
 
@@ -223,7 +146,7 @@ async def get_not_good_articles_embeddings(model):
 async def main() -> None:
 
     logger.debug("Loading SentenceTransformer model")
-    model = SentenceTransformer(config.MODEL_NAME, trust_remote_code=True, device="cpu")
+    model = SentenceTransformer(config.EMBEDDINGS_MODEL_NAME, trust_remote_code=True, device="cpu")
     logger.debug("Model loaded successfully.")
 
     await dr.global_pool.open(wait=True)
@@ -240,23 +163,20 @@ async def main() -> None:
     )
 
     models_to_test = [
-        # svc_elkanoto_pu_classifier,
-        # tuned_svc_elkanoto_pu_classifier,
-        # svc_weighted_elkanoto_pu_classifier,
-        # tuned_svc_weighted_elkanoto_pu_classifier,
-        # tuned_logistic_regression_weighted_elkanoto_pu_classifier,
-        # svc_bagging,
-        # modified_logistic_regression_bagging,
-        logistic_regression_bagging,
-        # tuned_logistic_regression_bagging,
-        # random_forest_bagging,
-        # tuned_random_forest_bagging,
-        # gradient_boosting_bagging,
-        # tuned_gradient_boosting_bagging,
-        # xgboost_bagging,
-        # tuned_xgboost_bagging,
-        # oneclass_svm_classifier,
-        # tuned_oneclass_svm_classifier,
+        # models.svc_elkanoto_pu_classifier,
+        # models.tuned_svc_elkanoto_pu_classifier,
+        # models.svc_weighted_elkanoto_pu_classifier,
+        # models.tuned_svc_weighted_elkanoto_pu_classifier,
+        models.tuned_logistic_regression_weighted_elkanoto_pu_classifier,
+        # models.svc_bagging,
+        models.logistic_regression_bagging,
+        models.tuned_logistic_regression_bagging,
+        models.random_forest_bagging,
+        models.tuned_random_forest_bagging,
+        models.gradient_boosting_bagging,
+        models.tuned_gradient_boosting_bagging,
+        models.xgboost_bagging,
+        models.tuned_xgboost_bagging,
     ]
 
     # True labels: 1 for good, 0 for not_good
@@ -270,7 +190,7 @@ async def main() -> None:
         logger.debug(f"Fitting PU classifier {mod_name}")
 
         model_path = (
-            f"saved_models/{mod_name}_{config.MODEL_NAME.replace('/', '-')}.pkl"
+            f"saved_models/{mod_name}_{config.EMBEDDINGS_MODEL_NAME.replace('/', '-')}.pkl"
         )
 
         if os.path.exists(model_path):
@@ -284,17 +204,10 @@ async def main() -> None:
 
         logger.debug(f"PU classifier {mod_name} fitted successfully.")
 
-        if "oneclass_svm_classifier" in mod_name:
-            # OneClassSVM does not have predict_proba, so we use decision_function
-            good_preds = pu_estimator.decision_function(good_embeddings)
-            not_good_preds = pu_estimator.decision_function(not_good_embeddings)
-            all_probs = np.concatenate([good_preds, not_good_preds])
-            pred_labels = (all_probs >= 0.5).astype(int)
-        else:
-            good_preds = pu_estimator.predict_proba(good_embeddings)[:, 1]
-            not_good_preds = pu_estimator.predict_proba(not_good_embeddings)[:, 1]
-            all_probs = np.concatenate([good_preds, not_good_preds])
-            pred_labels = (all_probs >= 0.5).astype(int)
+        good_preds = pu_estimator.predict_proba(good_embeddings)[:, 1]
+        not_good_preds = pu_estimator.predict_proba(not_good_embeddings)[:, 1]
+        all_probs = np.concatenate([good_preds, not_good_preds])
+        pred_labels = (all_probs >= 0.5).astype(int)
 
         precision = precision_score(true_labels, pred_labels)
         recall = recall_score(true_labels, pred_labels)
@@ -311,230 +224,6 @@ async def main() -> None:
         logger.info(f"Log Loss for {mod_name}: {logloss:.2f}")
 
     await dr.global_pool.close()
-
-
-def oneclass_svm_classifier(X, y, embeddings, unlabeled_embeddings):
-    ocsvm = OneClassSVM(kernel="linear", gamma="scale", nu=0.2)
-    ocsvm.fit(embeddings)
-
-    return ocsvm
-
-
-def tuned_oneclass_svm_classifier(X, y, embeddings, unlabeled_embeddings):
-    param_grid = {
-        "kernel": ["rbf", "linear", "sigmoid"],
-        "gamma": ["scale", "auto", 0.01, 0.1, 1],
-        "nu": [0.01, 0.05, 0.1, 0.2],
-    }
-
-    ocsvm = OneClassSVM()
-
-    return tune_pu_estimator(ocsvm, X, y, param_grid)
-
-
-def svc_elkanoto_pu_classifier(X, y, embeddings, unlabeled_embeddings):
-    # Takes a while for 7k + 7k articles
-    svc = SVC(C=10, kernel="rbf", gamma=0.4, probability=True)
-
-    pu_estimator = ElkanotoPuClassifier(
-        estimator=svc,
-        hold_out_ratio=0.2,
-    )
-    pu_estimator.fit(X, y)
-
-    return pu_estimator
-
-
-def tuned_svc_elkanoto_pu_classifier(X, y, embeddings, unlabeled_embeddings):
-    param_grid = {
-        "estimator__C": [0.1, 1, 10],
-        "estimator__gamma": [0.01, 0.1, 1],
-        "estimator__kernel": ["rbf", "linear"],
-    }
-    estimator = SVC(probability=True)
-
-    pu_estimator = ElkanotoPuClassifier(
-        estimator=estimator,
-        hold_out_ratio=0.2,
-    )
-
-    return tune_pu_estimator(pu_estimator, X, y, param_grid)
-
-
-def svc_weighted_elkanoto_pu_classifier(X, y, embeddings, unlabeled_embeddings):
-    svc = SVC(C=10, kernel="rbf", gamma=0.4, probability=True)
-
-    pu_estimator = WeightedElkanotoPuClassifier(
-        estimator=svc,
-        labeled=len(embeddings),
-        unlabeled=len(unlabeled_embeddings),
-        hold_out_ratio=0.2,
-    )
-    pu_estimator.fit(X, y)
-
-    return pu_estimator
-
-
-def tuned_svc_weighted_elkanoto_pu_classifier(X, y, embeddings, unlabeled_embeddings):
-    param_grid = {
-        "estimator__C": [0.1, 1, 10],
-        "estimator__gamma": [0.01, 0.1, 1],
-        "estimator__kernel": ["rbf", "linear"],
-    }
-    estimator = SVC(probability=True)
-
-    pu_estimator = WeightedElkanotoPuClassifier(
-        estimator=estimator,
-        labeled=len(embeddings),
-        unlabeled=len(unlabeled_embeddings),
-        hold_out_ratio=0.2,
-    )
-
-    return tune_pu_estimator(pu_estimator, X, y, param_grid)
-
-
-def tuned_logistic_regression_weighted_elkanoto_pu_classifier(
-    X, y, embeddings, unlabeled_embeddings
-):
-    param_grid = {
-        "estimator__C": [0.01, 0.1, 1, 10],
-        "estimator__penalty": ["l2"],
-        "estimator__solver": ["lbfgs"],
-        "estimator__max_iter": [100, 200],
-    }
-    estimator = LogisticRegression()
-
-    pu_estimator = WeightedElkanotoPuClassifier(
-        estimator=estimator,
-        labeled=len(embeddings),
-        unlabeled=len(unlabeled_embeddings),
-        hold_out_ratio=0.2,
-    )
-
-    return tune_pu_estimator(pu_estimator, X, y, param_grid)
-
-
-def svc_bagging(X, y, embeddings, unlabeled_embeddings):
-    estimator = SVC(C=10, kernel="rbf", gamma=0.4, probability=True)
-    pu_estimator = BaggingPuClassifier(
-        estimator=estimator, random_state=42, n_estimators=15
-    )
-    pu_estimator.fit(X, y)
-
-    return pu_estimator
-
-
-def logistic_regression_bagging(X, y, embeddings, unlabeled_embeddings):
-    estimator = LogisticRegression()
-    pu_estimator = BaggingPuClassifier(
-        estimator=estimator, random_state=42, n_estimators=15
-    )
-    pu_estimator.fit(X, y)
-
-    return pu_estimator
-
-
-def tuned_logistic_regression_bagging(X, y, embeddings, unlabeled_embeddings):
-    param_grid = {
-        "estimator__C": [0.5, 1, 1.5, 2, 3, 4, 5, 10],
-        "estimator__penalty": ["l2"],
-        "estimator__solver": ["lbfgs"],
-        "estimator__max_iter": [50, 75, 100, 125, 150, 200],
-        "n_estimators": [5, 10, 15, 20, 25, 30, 35],
-    }
-
-    estimator = LogisticRegression()
-    pu_estimator = BaggingPuClassifier(estimator=estimator, random_state=42)
-
-    return tune_pu_estimator(pu_estimator, X, y, param_grid)
-
-
-def modified_logistic_regression_bagging(X, y, embeddings, unlabeled_embeddings):
-    estimator = ModifiedLogisticRegression()
-    pu_estimator = BaggingPuClassifier(
-        estimator=estimator, random_state=42, n_estimators=15
-    )
-    pu_estimator.fit(X, y)
-
-    return pu_estimator
-
-
-def random_forest_bagging(X, y, embeddings, unlabeled_embeddings):
-    estimator = RandomForestClassifier()
-    pu_estimator = BaggingPuClassifier(
-        estimator=estimator, random_state=42, n_estimators=15
-    )
-    pu_estimator.fit(X, y)
-
-    return pu_estimator
-
-
-def tuned_random_forest_bagging(X, y, embeddings, unlabeled_embeddings):
-    param_grid = {
-        "estimator__n_estimators": [50, 100, 200],
-        "estimator__max_depth": [None, 10, 20],
-        "estimator__min_samples_split": [2, 5, 10],
-        "estimator__min_samples_leaf": [1, 2, 4],
-        "estimator__max_features": ["sqrt", "log2"],
-        "n_estimators": [5, 10, 15, 20, 25, 30, 35],
-    }
-    estimator = RandomForestClassifier()
-    pu_estimator = BaggingPuClassifier(estimator=estimator, random_state=42)
-    return tune_pu_estimator(pu_estimator, X, y, param_grid)
-
-
-def gradient_boosting_bagging(X, y, embeddings, unlabeled_embeddings):
-    estimator = HistGradientBoostingClassifier(
-        max_iter=100, learning_rate=0.1, max_depth=6, random_state=42
-    )
-    pu_estimator = BaggingPuClassifier(
-        estimator=estimator, random_state=42, n_estimators=15
-    )
-    pu_estimator.fit(X, y)
-    return pu_estimator
-
-
-def tuned_gradient_boosting_bagging(X, y, embeddings, unlabeled_embeddings):
-    param_grid = {
-        "estimator__learning_rate": [0.05, 0.1, 0.2],
-        "estimator__max_iter": [100, 200],
-        "estimator__max_depth": [3, 6, 9],
-        "estimator__l2_regularization": [0.0, 1.0, 10.0],
-        "n_estimators": [5, 10, 15, 20, 25, 30, 35],
-    }
-    estimator = HistGradientBoostingClassifier()
-    pu_estimator = BaggingPuClassifier(estimator=estimator, random_state=42)
-    return tune_pu_estimator(pu_estimator, X, y, param_grid)
-
-
-def xgboost_bagging(X, y, embeddings, unlabeled_embeddings):
-    estimator = XGBClassifier(
-        n_estimators=100,
-        max_depth=6,
-        learning_rate=0.1,
-        use_label_encoder=False,
-        eval_metric="logloss",  # Needed to avoid warnings
-        verbosity=0,
-        random_state=42,
-    )
-    pu_estimator = BaggingPuClassifier(
-        estimator=estimator, random_state=42, n_estimators=15
-    )
-    pu_estimator.fit(X, y)
-    return pu_estimator
-
-
-def tuned_xgboost_bagging(X, y, embeddings, unlabeled_embeddings):
-    param_grid = {
-        "estimator__learning_rate": [0.05, 0.1, 0.2],
-        "estimator__max_depth": [3, 6, 9],
-        "estimator__n_estimators": [100, 200],
-        "estimator__reg_lambda": [1, 5, 10],
-        "n_estimators": [5, 10, 15, 20, 25, 30],
-    }
-    estimator = XGBClassifier(iuse_label_encoder=False, eval_metric="logloss")
-    pu_estimator = BaggingPuClassifier(estimator=estimator, random_state=42)
-    return tune_pu_estimator(pu_estimator, X, y, param_grid)
 
 
 if __name__ == "__main__":

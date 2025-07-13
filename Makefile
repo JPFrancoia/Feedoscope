@@ -19,3 +19,6 @@ pkg:
 
 install:
 	uv sync
+
+infer:
+	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.infer
