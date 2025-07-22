@@ -3,6 +3,7 @@ import logging
 import os
 
 import joblib
+import numpy as np
 from sentence_transformers import SentenceTransformer
 
 from custom_logging import init_logging
@@ -47,8 +48,16 @@ async def main() -> None:
     )
 
     predictions = pu_estimator.predict_proba(recent_unread_embeddings)[:, 1]
+    predictions = np.round(predictions * 100).astype(int) - 50
 
-    breakpoint()
+    article_ids = [article["article_id"] for article in recent_unread_articles]
+
+    await dr.update_scores(
+        article_ids=article_ids,
+        scores=predictions,
+    )
+
+    logger.debug(f"Scores updated in the database for {len(article_ids)} articles.")
 
     await dr.global_pool.close()
 

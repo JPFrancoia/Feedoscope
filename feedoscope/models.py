@@ -7,7 +7,7 @@ from pulearn import (
 )
 from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import RandomizedSearchCV
+from sklearn.model_selection import RandomizedSearchCV, GridSearchCV
 from sklearn.svm import SVC
 from xgboost import XGBClassifier
 

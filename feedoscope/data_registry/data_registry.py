@@ -149,7 +149,9 @@ async def get_sample_not_good() -> list[dict[str, Any]]:
     return data
 
 
-async def get_previous_days_unread_articles(number_of_days: int = 7) -> list[dict[str, Any]]:
+async def get_previous_days_unread_articles(
+    number_of_days: int = 7,
+) -> list[dict[str, Any]]:
     """Get unread articles from the previous X days.
 
     This is used to fetch articles that are not read yet, but are still
@@ -170,6 +172,26 @@ async def get_previous_days_unread_articles(number_of_days: int = 7) -> list[dic
         data = await cur.fetchall()
 
     return data
+
+
+async def update_scores(article_ids: list[int], scores: list[int]) -> None:
+    """Update the scores of articles in the database.
+
+    Args:
+        article_ids: List of article IDs to update.
+        scores: List of scores to set for the articles.
+
+    """
+    query = _get_query_from_file("update_scores.sql")
+
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.executemany(
+            query,
+            [
+                {"score": score, "int_id": int_id}
+                for score, int_id in zip(scores, article_ids)
+            ],
+        )
 
 
 # TODO: create an Article model
