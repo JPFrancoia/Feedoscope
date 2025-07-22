@@ -24,11 +24,15 @@ FROM python:3.12-slim AS runtime
 ENV VIRTUAL_ENV=/app/.venv \
     PATH="/app/.venv/bin:$PATH"
 
+WORKDIR /app
+
 # Copy the environment, but not the source code
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 
 # Copy the relevant folders so that the application can run
-# COPY api ./api
+COPY logging.conf ./
+COPY custom_logging ./custom_logging
+COPY feedoscope ./feedoscope
 
 # Run the application
 CMD ["python", "-m", "feedoscope.pu_learn"]
