@@ -12,5 +12,5 @@ assert (
 ), "EMBEDDINGS_MODEL_NAME environment variable is empty"
 
 INFERENCE_MODEL_NAME = os.getenv(
-    "INFERENCE_MODEL_NAME", "logistic_regression_bagging_all-MiniLM-L12-v2.pkl"
+    "INFERENCE_MODEL_NAME", "random_forest_bagging_all-MiniLM-L12-v2.pkl"
 )

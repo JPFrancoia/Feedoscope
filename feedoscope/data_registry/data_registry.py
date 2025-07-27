@@ -150,7 +150,7 @@ async def get_sample_not_good() -> list[dict[str, Any]]:
 
 
 async def get_previous_days_unread_articles(
-    number_of_days: int = 7,
+    number_of_days: int = 14,
 ) -> list[dict[str, Any]]:
     """Get unread articles from the previous X days.
 
@@ -174,22 +174,33 @@ async def get_previous_days_unread_articles(
     return data
 
 
-async def update_scores(article_ids: list[int], scores: list[int]) -> None:
+async def update_scores(
+    article_ids: list[int], article_titles: list[str], scores: list[int]
+) -> None:
     """Update the scores of articles in the database.
 
     Args:
+        article_titles: List of article titles to update.
         article_ids: List of article IDs to update.
         scores: List of scores to set for the articles.
 
     """
-    query = _get_query_from_file("update_scores.sql")
+    scores_query = _get_query_from_file("update_scores.sql")
+    titles_query = _get_query_from_file("update_titles.sql")
 
     async with global_pool.connection() as conn, conn.cursor() as cur:
         await cur.executemany(
-            query,
+            scores_query,
             [
                 {"score": score, "int_id": int_id}
                 for score, int_id in zip(scores, article_ids)
+            ],
+        )
+        await cur.executemany(
+            titles_query,
+            [
+                {"title": title, "int_id": int_id}
+                for title, int_id in zip(article_titles, article_ids)
             ],
         )
 

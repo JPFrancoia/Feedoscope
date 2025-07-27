@@ -48,12 +48,17 @@ async def main() -> None:
     )
 
     predictions = pu_estimator.predict_proba(recent_unread_embeddings)[:, 1]
-    predictions = np.round(predictions * 100).astype(int) - 50
+    predictions = np.round(predictions * 100).astype(int)
 
     article_ids = [article["article_id"] for article in recent_unread_articles]
+    article_titles = [
+        f"[{score}] {article['title']}"
+        for score, article in zip(predictions, recent_unread_articles)
+    ]
 
     await dr.update_scores(
         article_ids=article_ids,
+        article_titles=article_titles,
         scores=predictions,
     )
 

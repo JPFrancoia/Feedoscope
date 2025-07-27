@@ -23,7 +23,6 @@ where
     and (ue.marked = false
         and ue.unread = true)
     and e.date_entered >= now() - interval '1 day' * %(number_of_days)s
-    and score = 0
 group by
     e.id,
     e.title,
