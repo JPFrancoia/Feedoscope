@@ -55,7 +55,7 @@ def chunk_text(text, tokenizer, max_tokens):
 
 async def get_read_articles_embeddings(model):
 
-    embeddings_path = f"embeddings_{config.EMBEDDINGS_MODEL_NAME.replace('/', '-')}.npy"
+    embeddings_path = f"embeddings/embeddings_{config.EMBEDDINGS_MODEL_NAME.replace('/', '-')}.npy"
     if os.path.exists(embeddings_path):
         logger.debug("Loading embeddings from file")
         embeddings = utils.load_embeddings(embeddings_path)
@@ -75,7 +75,7 @@ async def get_read_articles_embeddings(model):
 
 
 async def get_unread_articles_embeddings(model):
-    embeddings_path = f"embeddings_unread_{config.EMBEDDINGS_MODEL_NAME.replace('/', '-')}.npy"
+    embeddings_path = f"embeddings/embeddings_unread_{config.EMBEDDINGS_MODEL_NAME.replace('/', '-')}.npy"
     if os.path.exists(embeddings_path):
         logger.debug("Loading unread articles embeddings from file")
         embeddings = utils.load_embeddings(embeddings_path)
@@ -100,7 +100,7 @@ async def get_unread_articles_embeddings(model):
 
 
 async def get_good_articles_embeddings(model):
-    embeddings_path = f"embeddings_good_{config.EMBEDDINGS_MODEL_NAME.replace('/', '-')}.npy"
+    embeddings_path = f"embeddings/embeddings_good_{config.EMBEDDINGS_MODEL_NAME.replace('/', '-')}.npy"
     if os.path.exists(embeddings_path):
         logger.debug("Loading good articles embeddings from file")
         embeddings = utils.load_embeddings(embeddings_path)
@@ -119,7 +119,7 @@ async def get_good_articles_embeddings(model):
 
 
 async def get_not_good_articles_embeddings(model):
-    embeddings_path = f"embeddings_not_good_{config.EMBEDDINGS_MODEL_NAME.replace('/', '-')}.npy"
+    embeddings_path = f"embeddings/embeddings_not_good_{config.EMBEDDINGS_MODEL_NAME.replace('/', '-')}.npy"
     if os.path.exists(embeddings_path):
         logger.debug("Loading not good articles embeddings from file")
         embeddings = utils.load_embeddings(embeddings_path)

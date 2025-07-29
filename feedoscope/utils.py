@@ -30,7 +30,7 @@ def prepare_articles_text(articles) -> list[str]:
         # in square brackets. Clean it up before processing.
         title = re.sub(r"^\[[^]]*\]\s*", "", a["title"])
         a["title"] = title
-        text = clean(strip_html_keep_text(f"{a['feed_name']} {title} {a['content']}"))
+        text = clean(strip_html_keep_text(f"{title} {a['content']}"))
         texts.append(text)
 
     return texts

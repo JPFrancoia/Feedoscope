@@ -21,6 +21,7 @@ with numbered_articles as (
         left join ttrss_tags t on ue.int_id = t.post_int_id
     where
         ue.published = true
+        and e.date_entered > now() - interval '1 year'
     group by
         e.id,
         e.title,

@@ -23,6 +23,7 @@ with numbered_articles as (
         ue.published = false
         and (ue.marked = true
             or ue.unread = false)
+        and e.date_entered > now() - interval '1 year'
     group by
         e.id,
         e.title,

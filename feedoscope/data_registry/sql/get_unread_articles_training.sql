@@ -21,6 +21,7 @@ where
     ue.published = false
     and (ue.marked = false
         and ue.unread = true)
+    and e.date_entered > now() - interval '1 year'
 group by
     e.id,
     e.title,
@@ -32,5 +33,5 @@ group by
     ue.last_read
 order by
     e.id desc
-limit 7000;
+limit 2000;
 
