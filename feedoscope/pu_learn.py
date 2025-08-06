@@ -167,16 +167,16 @@ async def main() -> None:
         # models.tuned_svc_elkanoto_pu_classifier,
         # models.svc_weighted_elkanoto_pu_classifier,
         # models.tuned_svc_weighted_elkanoto_pu_classifier,
-        models.tuned_logistic_regression_weighted_elkanoto_pu_classifier,
+        # models.tuned_logistic_regression_weighted_elkanoto_pu_classifier,
         # models.svc_bagging,
         models.logistic_regression_bagging,
-        models.tuned_logistic_regression_bagging,
+        # models.tuned_logistic_regression_bagging,
         models.random_forest_bagging,
-        models.tuned_random_forest_bagging,
-        models.gradient_boosting_bagging,
-        models.tuned_gradient_boosting_bagging,
-        models.xgboost_bagging,
-        models.tuned_xgboost_bagging,
+        # models.tuned_random_forest_bagging,
+        # models.gradient_boosting_bagging,
+        # models.tuned_gradient_boosting_bagging,
+        # models.xgboost_bagging,
+        # models.tuned_xgboost_bagging,
     ]
 
     # True labels: 1 for good, 0 for not_good
