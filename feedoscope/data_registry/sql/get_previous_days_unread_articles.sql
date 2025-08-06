@@ -34,5 +34,5 @@ group by
     e.date_entered,
     ue.last_read
 order by
-    e.id desc;
+    e.id asc;
 

@@ -11,7 +11,7 @@ with numbered_articles as (
         ue.last_read,
         STRING_AGG(distinct l.caption, ', ') as labels,
         STRING_AGG(distinct t.tag_name, ', ') as tags,
-        row_number() over (order by e.id desc) as rn
+        row_number() over (order by e.id asc) as rn
     from
         ttrss_entries e
         join ttrss_user_entries ue on e.id = ue.ref_id
@@ -47,6 +47,6 @@ select
 from
     numbered_articles
 where
-    rn <= 100
+    rn <= %(validation_size)s
 order by
-    article_id desc;
+    article_id asc;
