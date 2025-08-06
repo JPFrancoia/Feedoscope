@@ -33,7 +33,7 @@ def _get_query_from_file(filename: str) -> LiteralString:
     return query
 
 
-async def get_read_articles_training() -> list[dict[str, Any]]:
+async def get_read_articles_training(validation_size: int = 100) -> list[dict[str, Any]]:
     """Get read articles for training.
 
     These articles are consdered "good", aka "interesting" by the user.
@@ -41,18 +41,19 @@ async def get_read_articles_training() -> list[dict[str, Any]]:
     The articles are returned ordered by article id descending, so the order is
     deterministic.
 
+    Args:
+        validation_size: Number of articles to leave for validation
+
     Returns:
         List of good articles for training.
 
     """
     query = _get_query_from_file("get_read_articles_training.sql")
 
-    # TODO: parametrize how many articles to leave for validation, for now it's hardcoded to 100
-
     async with global_pool.connection() as conn, conn.cursor() as cur:
         await cur.execute(
             query,
-            # {"param": param_value},
+            {"validation_size": validation_size},
         )
         data = await cur.fetchall()
 
@@ -84,13 +85,18 @@ async def get_unread_articles_training() -> list[dict[str, Any]]:
     return data
 
 
-async def get_published_articles() -> list[dict[str, Any]]:
+async def get_published_articles(validation_size: int = 0) -> list[dict[str, Any]]:
     """Fetch published articles.
 
     Published articles are considered "bad", aka "not interesting" by the user.
     This is because there is no buttn to mark an article as "not interesting" in
     ttrss' UI, and I don't use the published articles feature.
     All published articles are fetched, ordered by article id descending.
+
+    Args:
+        validation_size: Number of articles to leave for validation. Default to 0
+            for PU learning, because not using published (aka bad) articles for
+            training with PU learning.
 
     Returns:
         A list of published articles, aka "not interesting" articles.
@@ -101,15 +107,18 @@ async def get_published_articles() -> list[dict[str, Any]]:
     async with global_pool.connection() as conn, conn.cursor() as cur:
         await cur.execute(
             query,
-            # {"param": param_value},
+            {"validation_size": validation_size},
         )
         data = await cur.fetchall()
 
     return data
 
 
-async def get_sample_good() -> list[dict[str, Any]]:
+async def get_sample_good(validation_size: int) -> list[dict[str, Any]]:
     """Get a sample of good articles for validation.
+
+    Args:
+        validation_size: Number of articles left for validation
 
     Returns:
         A list of good articles, aka "interesting" articles.
@@ -123,15 +132,18 @@ async def get_sample_good() -> list[dict[str, Any]]:
     async with global_pool.connection() as conn, conn.cursor() as cur:
         await cur.execute(
             query,
-            # {"param": param_value},
+            {"validation_size": validation_size},
         )
         data = await cur.fetchall()
 
     return data
 
 
-async def get_sample_not_good() -> list[dict[str, Any]]:
+async def get_sample_not_good(validation_size: int) -> list[dict[str, Any]]:
     """Get a sample of not good articles for validation.
+
+    Args:
+        validation_size: Number of articles left for validation
 
     Returns:
         A list of not good articles, aka "not interesting" articles.
@@ -142,7 +154,7 @@ async def get_sample_not_good() -> list[dict[str, Any]]:
     async with global_pool.connection() as conn, conn.cursor() as cur:
         await cur.execute(
             query,
-            # {"param": param_value},
+            {"validation_size": validation_size},
         )
         data = await cur.fetchall()
 
