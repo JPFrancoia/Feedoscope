@@ -2,60 +2,55 @@ import asyncio
 import logging
 import os
 
-from datasets import Dataset
-import evaluate
-import joblib
 import numpy as np
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics import (
-    average_precision_score,
-    f1_score,
-    log_loss,
-    precision_score,
-    recall_score,
-    roc_auc_score,
-)
 import torch
-from torch.nn.functional import softmax
 import tqdm
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
-    DataCollatorWithPadding,
-    Trainer,
-    TrainingArguments,
 )
 
 from custom_logging import init_logging
-from feedoscope import config, models, utils
+from feedoscope import config, utils
 from feedoscope.data_registry import data_registry as dr
 
 logger = logging.getLogger(__name__)
 
 # https://huggingface.co/blog/modernbert
 
-# MODEL_NAME = "distilbert/distilbert-base-uncased"
-MODEL_NAME = "answerdotai/ModernBERT-base"
-# MODEL_NAME = "FacebookAI/roberta-base"
-# MAX_LENGTH = 4096  # Maximum length for the tokenizer
+MODEL_NAME = "answerdotai-ModernBERT-base_512_2_epochs_16_batch_size"
 MAX_LENGTH = 512  # Maximum length for the tokenizer
-
-INFERENCE_BATCH_SIZE = 32
+INFERENCE_BATCH_SIZE = 128
 
 
 def preprocess_function(tokenizer, examples, max_length):
     return tokenizer(examples["text"], truncation=True, max_length=max_length)
 
 
+def find_latest_model(model_name: str) -> str:
+    #iterate through the saved models directory. Look for the model starting with the model_name. sort by name and return the latest one.
+    saved_models_dir = "saved_models"
+    if not os.path.exists(saved_models_dir):
+        raise FileNotFoundError(f"Directory {saved_models_dir} does not exist.")
+    model_dirs = [
+        d for d in os.listdir(saved_models_dir) if d.startswith(model_name)
+    ]
+    if not model_dirs:
+        raise FileNotFoundError(f"No models found starting with {model_name} in {saved_models_dir}.")
+    model_dirs.sort()  # Sort by name, assuming the latest model has the highest name
+    latest_model = model_dirs[-1]
+    return os.path.join(saved_models_dir, latest_model)
+
+
 async def main() -> None:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info(f"Using device: {device}")
 
-    model_path = f"saved_models/{MODEL_NAME.replace('/', '-')}"
+    model_path = find_latest_model(MODEL_NAME.replace('/', '-'))
 
-    if os.path.exists(model_path):
-        logger.info(f"Loading model from {model_path}")
-        model = AutoModelForSequenceClassification.from_pretrained(model_path)
-    else:
-        raise RuntimeError(f"Model {MODEL_NAME} not found in {model_path}")
+    logger.info(f"Loading model from {model_path}")
+    model = AutoModelForSequenceClassification.from_pretrained(model_path)
+    model.to(device)  # Move model to GPU if available
 
     await dr.global_pool.open(wait=True)
 
@@ -64,7 +59,7 @@ async def main() -> None:
 
     logger.debug(f"Collected {len(recent_unread_articles)} recent unread articles.")
 
-    logger.debug("Tokenizing articles for validation...")
+    logger.debug("Tokenizing articles for inference...")
 
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     inputs = tokenizer(
@@ -80,30 +75,20 @@ async def main() -> None:
     logger.debug("Inferencing...")
 
     all_probs = []
-
     model.eval()
     with torch.no_grad():
-        for i in tqdm.tqdm(
+        for start in tqdm.tqdm(
             range(0, len(articles_text), INFERENCE_BATCH_SIZE),
-            total=(len(articles_text) + INFERENCE_BATCH_SIZE - 1)
-            // INFERENCE_BATCH_SIZE,
+            total=(len(articles_text) + INFERENCE_BATCH_SIZE - 1) // INFERENCE_BATCH_SIZE,
             desc="Inferencing",
         ):
-            batch_texts = articles_text[i : i + INFERENCE_BATCH_SIZE]
-            inputs = tokenizer(
-                batch_texts,
-                padding=True,
-                truncation=True,
-                max_length=MAX_LENGTH,
-                return_tensors="pt",
-            )
-            preds = model(**inputs).logits
+            end = start + INFERENCE_BATCH_SIZE
+            batch_inputs = {k: v[start:end].to(device) for k, v in inputs.items()}
+            preds = model(**batch_inputs).logits
             probs = torch.sigmoid(preds[:, 1]).cpu().numpy()
             all_probs.extend(probs)
 
     logger.debug("Inference completed successfully.")
-
-    # breakpoint()
 
     probs = np.round(np.array(all_probs) * 100).astype(int)
 

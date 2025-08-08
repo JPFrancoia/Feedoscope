@@ -5,6 +5,9 @@ TAG=$(shell git log -1 --pretty=%h)
 train:
 	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.pu_learn
 
+llm_train:
+	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.llm_learn
+
 pkg:
 	echo "Tag: " ${TAG}
 	echo ${NAME}:${TAG}
@@ -22,3 +25,6 @@ install:
 
 infer:
 	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.infer
+
+llm_infer:
+	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.llm_infer

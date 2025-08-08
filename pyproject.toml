@@ -22,9 +22,11 @@ dev = [
     "ipdb>=0.13.13",
     "ipython>=9.4.0",
     "isort>=6.0.1",
+    "microsoft-python-type-stubs",
     "mypy>=1.17.1",
     "pre-commit>=4.2.0",
     "ruff>=0.12.2",
+    "types-tqdm>=4.67.0.20250516",
 ]
 train = [
     "transformers[torch] (>=4.53.0,<5.0.0)",
@@ -35,6 +37,9 @@ train = [
 
 [tool.uv]
 default-groups = ["dev", "train"]
+
+[tool.uv.sources]
+microsoft-python-type-stubs = { git = "https://github.com/microsoft/python-type-stubs.git" }
 
 [tool.isort]
 # Make isort compatible with black
