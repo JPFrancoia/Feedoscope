@@ -33,6 +33,3 @@ COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY logging.conf ./
 COPY custom_logging ./custom_logging
 COPY feedoscope ./feedoscope
-
-# Run the application
-CMD ["python", "-m", "feedoscope.pu_learn"]

@@ -16,8 +16,8 @@ pkg:
 	docker tag ${NAME}:${TAG} ${NAME}:latest
 	docker tag ${NAME}:${TAG} ${BUILD_HOST}/${NAME}:${TAG}
 	docker tag ${NAME}:${TAG} ${BUILD_HOST}/${NAME}:latest
-	# docker push ${BUILD_HOST}/${NAME}:${TAG}
-	# docker push ${BUILD_HOST}/${NAME}:latest
+	docker push ${BUILD_HOST}/${NAME}:${TAG}
+	docker push ${BUILD_HOST}/${NAME}:latest
 	# trivy image ${NAME}:${TAG}
 
 install:
