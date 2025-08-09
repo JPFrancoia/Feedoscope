@@ -20,6 +20,8 @@ RUN uv sync --locked --no-editable --no-group dev
 
 FROM python:3.12-slim AS runtime
 
+RUN apt-get update && apt-get install -y libpq-dev postgresql-client
+
 # Place executables in the environment at the front of the path
 ENV VIRTUAL_ENV=/app/.venv \
     PATH="/app/.venv/bin:$PATH"
