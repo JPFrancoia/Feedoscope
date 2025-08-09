@@ -34,7 +34,7 @@ dev = [
 ]
 
 [tool.uv]
-default-groups = ["dev", "train"]
+default-groups = ["dev"]
 
 [tool.uv.sources]
 microsoft-python-type-stubs = { git = "https://github.com/microsoft/python-type-stubs.git" }
