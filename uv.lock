@@ -338,10 +338,14 @@ dependencies = [
     { name = "datasets" },
     { name = "evaluate" },
     { name = "joblib" },
+    { name = "pandas" },
     { name = "psycopg" },
     { name = "psycopg-pool" },
+    { name = "pulearn" },
     { name = "python-json-logger" },
     { name = "sentence-transformers" },
+    { name = "transformers", extra = ["torch"] },
+    { name = "xgboost" },
 ]
 
 [package.dev-dependencies]
@@ -356,12 +360,6 @@ dev = [
     { name = "ruff" },
     { name = "types-tqdm" },
 ]
-train = [
-    { name = "pandas" },
-    { name = "pulearn" },
-    { name = "transformers", extra = ["torch"] },
-    { name = "xgboost" },
-]
 
 [package.metadata]
 requires-dist = [
@@ -370,10 +368,14 @@ requires-dist = [
     { name = "datasets", specifier = ">=4.0.0" },
     { name = "evaluate", specifier = ">=0.4.5" },
     { name = "joblib", specifier = ">=1.5.1,<2.0.0" },
+    { name = "pandas", specifier = ">=2.3.1" },
     { name = "psycopg", specifier = ">=3.2.9,<4.0.0" },
     { name = "psycopg-pool", specifier = ">=3.2.6,<4.0.0" },
+    { name = "pulearn", specifier = ">=0.0.11,<0.0.12" },
     { name = "python-json-logger", specifier = ">=3.3.0,<4.0.0" },
     { name = "sentence-transformers", specifier = ">=4.1.0,<5.0.0" },
+    { name = "transformers", extras = ["torch"], specifier = ">=4.53.0,<5.0.0" },
+    { name = "xgboost", specifier = ">=3.0.2,<4.0.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -387,12 +389,6 @@ dev = [
     { name = "pre-commit", specifier = ">=4.2.0" },
     { name = "ruff", specifier = ">=0.12.2" },
     { name = "types-tqdm", specifier = ">=4.67.0.20250516" },
-]
-train = [
-    { name = "pandas", specifier = ">=2.3.1" },
-    { name = "pulearn", specifier = ">=0.0.11,<0.0.12" },
-    { name = "transformers", extras = ["torch"], specifier = ">=4.53.0,<5.0.0" },
-    { name = "xgboost", specifier = ">=3.0.2,<4.0.0" },
 ]
 
 [[package]]
