@@ -130,6 +130,9 @@ async def train_model(
 
 async def main() -> None:
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info(f"Using device: {device}")
+
     logger.debug("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     logger.debug("Tokenizer loaded successfully.")
@@ -148,6 +151,9 @@ async def main() -> None:
     if os.path.exists(model_path):
         logger.info(f"Loading model from {model_path}")
         model = AutoModelForSequenceClassification.from_pretrained(model_path)
+
+        # TODO: handle this error: ValueError: Unrecognized model in saved_models/answerdotai-ModernBERT-base_512_2_epochs_16_batch_size_2029_good_366_not_good.
+        # When the folder is empty, it raises an error.
     else:
         logger.info("Training new model...")
         trainer = await train_model(model_path, tokenizer, good_articles, bad_articles)
@@ -186,7 +192,6 @@ async def main() -> None:
     )
     logger.debug("Articles tokenized successfully.")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     with torch.no_grad():
         inputs_good = {k: v.to(device) for k, v in inputs_good.items()}
