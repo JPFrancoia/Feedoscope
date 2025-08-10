@@ -22,6 +22,8 @@ FROM python:3.12-slim AS runtime
 
 RUN apt-get update && apt-get install -y libpq-dev postgresql-client
 
+RUN apt-get update && apt-get install -y cuda-runtime-12-8
+
 # Place executables in the environment at the front of the path
 ENV VIRTUAL_ENV=/app/.venv \
     PATH="/app/.venv/bin:$PATH" \
