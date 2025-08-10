@@ -24,7 +24,9 @@ RUN apt-get update && apt-get install -y libpq-dev postgresql-client
 
 # Place executables in the environment at the front of the path
 ENV VIRTUAL_ENV=/app/.venv \
-    PATH="/app/.venv/bin:$PATH"
+    PATH="/app/.venv/bin:$PATH" \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 WORKDIR /app
 
