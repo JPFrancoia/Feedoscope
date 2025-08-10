@@ -20,7 +20,7 @@ RUN uv sync --locked --no-editable --no-group dev
 
 FROM python:3.12-slim AS runtime
 
-RUN apt-get update && apt-get install -y libpq-dev postgresql-client
+RUN apt-get update && apt-get install -y libpq-dev postgresql-client build-essential
 
 # Add NVIDIA's CUDA repo
 RUN apt-get update && apt-get install -y wget gnupg ca-certificates && \
