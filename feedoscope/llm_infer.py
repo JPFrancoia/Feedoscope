@@ -1,10 +1,10 @@
 import asyncio
 import logging
 import os
+import time
 
 import numpy as np
 import torch
-import tqdm
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -28,15 +28,16 @@ def preprocess_function(tokenizer, examples, max_length):
 
 
 def find_latest_model(model_name: str) -> str:
-    #iterate through the saved models directory. Look for the model starting with the model_name. sort by name and return the latest one.
+    # iterate through the saved models directory. Look for the model starting with
+    # the model_name. sort by name and return the latest one.
     saved_models_dir = "saved_models"
     if not os.path.exists(saved_models_dir):
         raise FileNotFoundError(f"Directory {saved_models_dir} does not exist.")
-    model_dirs = [
-        d for d in os.listdir(saved_models_dir) if d.startswith(model_name)
-    ]
+    model_dirs = [d for d in os.listdir(saved_models_dir) if d.startswith(model_name)]
     if not model_dirs:
-        raise FileNotFoundError(f"No models found starting with {model_name} in {saved_models_dir}.")
+        raise FileNotFoundError(
+            f"No models found starting with {model_name} in {saved_models_dir}."
+        )
     model_dirs.sort()  # Sort by name, assuming the latest model has the highest name
     latest_model = model_dirs[-1]
     return os.path.join(saved_models_dir, latest_model)
@@ -46,7 +47,15 @@ async def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
 
-    model_path = find_latest_model(MODEL_NAME.replace('/', '-'))
+    # Crash on GPU not available if ALLOW_INFERENCE_WO_GPU is False
+    if device.type != "cuda" and not config.ALLOW_INFERENCE_WO_GPU:
+        mes = f"GPU not available. Device is '{device}'. Exiting"
+        logger.critical(mes)
+        raise RuntimeError(mes)
+
+    start_time = time.time()
+
+    model_path = find_latest_model(MODEL_NAME.replace("/", "-"))
 
     logger.info(f"Loading model from {model_path}")
     model = AutoModelForSequenceClassification.from_pretrained(model_path)
@@ -77,11 +86,10 @@ async def main() -> None:
     all_probs = []
     model.eval()
     with torch.no_grad():
-        for start in tqdm.tqdm(
-            range(0, len(articles_text), INFERENCE_BATCH_SIZE),
-            total=(len(articles_text) + INFERENCE_BATCH_SIZE - 1) // INFERENCE_BATCH_SIZE,
-            desc="Inferencing",
-        ):
+        for start in range(0, len(articles_text), INFERENCE_BATCH_SIZE):
+            logger.debug(
+                f"Processing batch {start // INFERENCE_BATCH_SIZE + 1} of {len(articles_text) // INFERENCE_BATCH_SIZE + 1}"
+            )
             end = start + INFERENCE_BATCH_SIZE
             batch_inputs = {k: v[start:end].to(device) for k, v in inputs.items()}
             preds = model(**batch_inputs).logits
@@ -107,6 +115,11 @@ async def main() -> None:
     logger.debug(f"Scores updated in the database for {len(article_ids)} articles.")
 
     await dr.global_pool.close()
+
+    elapsed_time = time.time() - start_time
+    logger.info(
+        f"Inference completed in {elapsed_time:.2f} seconds for {len(recent_unread_articles)} articles."
+    )
 
 
 if __name__ == "__main__":
