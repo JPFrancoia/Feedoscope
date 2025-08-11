@@ -36,5 +36,3 @@ ALLOW_TRAINING_WO_GPU = strtobool(
 ALLOW_INFERENCE_WO_GPU = strtobool(
     os.getenv("ALLOW_INFERENCE_WO_GPU", "False")
 )
-
-# DELETE_MODEL_ON_START = os.getenv(

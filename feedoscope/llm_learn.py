@@ -24,6 +24,7 @@ from transformers import (
     DataCollatorWithPadding,
     EarlyStoppingCallback,
     Trainer,
+    TrainerCallback,
     TrainingArguments,
 )
 
@@ -77,6 +78,15 @@ def preprocess_function(tokenizer, examples, max_length):
     return tokenizer(examples["text"], truncation=True, max_length=max_length)
 
 
+class ProgressLoggingCallback(TrainerCallback):
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        # state.global_step: current step
+        # state.max_steps: total steps (if known)
+        logger.info(
+            f"Training progress: step {state.global_step}/{state.max_steps or '?'}"
+        )
+
+
 async def train_model(
     model_path: str, tokenizer: AutoTokenizer, good_articles, bad_articles
 ) -> Trainer:
@@ -125,7 +135,10 @@ async def train_model(
         data_collator=data_collator,
         compute_metrics=compute_metrics,
         # stop training if no improvement for 2 epochs
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=2)],
+        callbacks=[
+            EarlyStoppingCallback(early_stopping_patience=2),
+            ProgressLoggingCallback(),
+        ],
     )
 
     trainer.train()
