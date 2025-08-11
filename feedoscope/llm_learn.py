@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import time
 
 from datasets import Dataset
 import joblib
@@ -107,6 +108,10 @@ async def train_model(
         load_best_model_at_end=True,
         push_to_hub=False,
         metric_for_best_model="average_precision",
+        logging_strategy="steps",
+        logging_steps=2,
+        disable_tqdm=True,
+        logging_first_step=True,
     )
 
     model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME, num_labels=2)
@@ -133,6 +138,13 @@ async def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
 
+    if device.type != "cuda" and not config.ALLOW_TRAINING_WO_GPU:
+        mes = "GPU not available. Exiting"
+        logger.critical(mes)
+        raise RuntimeError(mes)
+
+    start_time = time.time()
+
     logger.debug("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     logger.debug("Tokenizer loaded successfully.")
@@ -150,16 +162,31 @@ async def main() -> None:
 
     if os.path.exists(model_path):
         logger.info(f"Loading model from {model_path}")
-        model = AutoModelForSequenceClassification.from_pretrained(model_path)
 
-        # TODO: handle this error: ValueError: Unrecognized model in saved_models/answerdotai-ModernBERT-base_512_2_epochs_16_batch_size_2029_good_366_not_good.
-        # When the folder is empty, it raises an error.
+        try:
+            model = AutoModelForSequenceClassification.from_pretrained(model_path)
+        except ValueError as e:
+            # handle this error: ValueError: Unrecognized model in saved_models/answerdotai-[..]
+            # When this happens, it's likely because a previous run created the
+            # directory but the training run didn't complete and left an empty directory.
+            logger.error(f"Error loading model: {e}")
+            logger.info("Model not found or corrupted, deleting the model path.")
+            os.remove(model_path)
+            raise RuntimeError(
+                f"Model not found or corrupted at {model_path}. The model's directory has been deleted."
+            )
+
+        # TODO: use storage class with 2 nodes only
+
     else:
         logger.info("Training new model...")
         trainer = await train_model(model_path, tokenizer, good_articles, bad_articles)
         trainer.save_model(model_path)
         model = trainer.model
         logger.info(f"Model saved to {model_path}")
+
+    elapsed_time = time.time() - start_time
+    logger.info(f"Training completed in {elapsed_time:.2f} seconds.")
 
     if VALIDATION_SIZE == 0:
         logger.info("No validation size set, skipping validation.")
@@ -225,6 +252,9 @@ async def main() -> None:
     logger.info(f"Log Loss: {logloss:.2f}")
 
     await dr.global_pool.close()
+
+    elapsed_time = time.time() - start_time
+    logger.info(f"Training and validation completed in {elapsed_time:.2f} seconds.")
 
 
 if __name__ == "__main__":
