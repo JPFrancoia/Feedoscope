@@ -18,12 +18,13 @@ dependencies = [
     "xgboost (>=3.0.2,<4.0.0)",
     "pulearn (>=0.0.11,<0.0.12)",
     "pandas>=2.3.1",
-    "torch>=2.8.0",
+    "llama-cpp-python>=0.3.16",
 ]
 
 [dependency-groups]
 dev = [
     "black>=25.1.0",
+    "huggingface-hub[cli]>=0.34.4",
     "ipdb>=0.13.13",
     "ipython>=9.4.0",
     "isort>=6.0.1",
