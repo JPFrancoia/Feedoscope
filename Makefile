@@ -28,3 +28,15 @@ infer:
 
 llm_infer:
 	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.llm_infer
+
+up:
+	migrate -database ${DATABASE_URL} -path db/migrations up 1
+
+down:
+	migrate -database ${DATABASE_URL} -path db/migrations down 1
+
+up_all:
+	migrate -database ${DATABASE_URL} -path db/migrations up
+
+down_all:
+	migrate -database ${DATABASE_URL} -path db/migrations down

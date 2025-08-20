@@ -24,6 +24,8 @@ async def main() -> None:
     inference_model_path = f"saved_models/{config.INFERENCE_MODEL_NAME}"
     if os.path.exists(inference_model_path):
         logger.debug(f"Loading existing model from {inference_model_path}")
+
+        # TODO: add error handling here, log if model loading fails
         pu_estimator = joblib.load(inference_model_path)
         logger.debug("Inference model loaded successfully.")
     else:
