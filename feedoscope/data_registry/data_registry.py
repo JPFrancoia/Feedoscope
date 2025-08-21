@@ -217,4 +217,18 @@ async def update_scores(
         )
 
 
+# WARNING: this returns a different article format than the other functions
+async def get_previous_days_articles_wo_time_sensitivity(number_of_days: int = 14) -> list[dict[str, Any]]:
+    query = _get_query_from_file("get_previous_days_wo_time_sensitivity_articles.sql")
+
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(
+            query,
+            {"number_of_days": number_of_days},
+        )
+        data = await cur.fetchall()
+
+    return data
+
+
 # TODO: create an Article model

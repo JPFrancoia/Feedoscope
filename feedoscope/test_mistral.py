@@ -45,9 +45,9 @@ Analyze the provided article information and determine its time-sensitivity rati
 
 **JSON Output Schema:**
 {
-  "rating": <integer between 1 and 5>,
-  "confidence": <string, "High", "Medium", or "Low">,
-  "reasoning": <string, a concise explanation for the rating>,
+  "score": <integer between 1 and 5>,
+  "confidence": <string, "high", "medium", or "low">,
+  "explanation": <string, a concise explanation for the rating>,
 }
 
 **Rating Scale Definitions:**
@@ -58,7 +58,7 @@ Analyze the provided article information and determine its time-sensitivity rati
 - **5 (Critical):** Live coverage of a rapidly unfolding event; loses relevance in hours. Keywords: "live", "breaking", "unfolding", "evacuation", "alert".
 
 **Instructions:**
-Analyze the following article. Provide your response as a single, valid JSON object and nothing else.
+Analyze the following article. Provide your response as a single, valid JSON object and nothing else. Do not include any additional text, labels, or markdown formatting. Ensure your JSON is well-formed and valid.
 
 **Article Data:**
 Title: {{headline}}
@@ -87,7 +87,7 @@ async def main() -> None:
 
     await dr.global_pool.open(wait=True)
 
-    recent_unread_articles = await dr.get_previous_days_unread_articles(
+    recent_unread_articles = await dr.get_previous_days_articles_wo_time_sensitivity(
         number_of_days=1
     )
 
@@ -109,6 +109,8 @@ async def main() -> None:
         result = output.get("choices")[0]["text"]
         print(f"Article: {title}\nRating: {result.strip()}\n")
         # breakpoint()
+
+        # TODO: assign labels to the article, into the database
 
 
 if __name__ == "__main__":
