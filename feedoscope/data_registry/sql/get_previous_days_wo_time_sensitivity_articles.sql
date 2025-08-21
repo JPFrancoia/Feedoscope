@@ -3,7 +3,7 @@ select
     e.title,
     e.content
 from
-    ttrss_entries
+    ttrss_entries as e
     left join time_sensitivity ts on e.id = ts.article_id
 where
     ts.article_id is null
