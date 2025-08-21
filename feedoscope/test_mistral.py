@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import re
 
@@ -88,15 +89,17 @@ async def main() -> None:
     await dr.global_pool.open(wait=True)
 
     recent_unread_articles = await dr.get_previous_days_articles_wo_time_sensitivity(
-        number_of_days=1
+        number_of_days=14
     )
+
+    time_sensitivities: list[dict] = []
 
     for article in recent_unread_articles:
         title = re.sub(r"^\[[^]]*\]\s*", "", article["title"])
         final_prompt = PROMPT.replace("{{headline}}", title)
         final_prompt = final_prompt.replace(
             "{{article_summary_or_first_paragraph}}",
-            prepare_content(article["content"], llm)
+            prepare_content(article["content"], llm),
         )
 
         output = llm(
@@ -105,12 +108,26 @@ async def main() -> None:
             stop=["[/INST]"],
             echo=False,
         )
-        # print(output)
         result = output.get("choices")[0]["text"]
-        print(f"Article: {title}\nRating: {result.strip()}\n")
-        # breakpoint()
+
+        try:
+            parsed_result = json.loads(result)
+            parsed_result["article_id"] = article["article_id"]
+        except json.JSONDecodeError:
+            logger.error(f"Failed to parse JSON from LLM output: {result}")
+            continue
+
+        time_sensitivities.append(parsed_result)
+
+        logger.debug(f"Article: {title}, data: {parsed_result}")
 
         # TODO: assign labels to the article, into the database
+
+    if time_sensitivities:
+        await dr.register_time_sensitivity_for_articles(time_sensitivities)
+        logger.info(
+            f"Registered time sensitivities for {len(time_sensitivities)} articles."
+        )
 
 
 if __name__ == "__main__":
