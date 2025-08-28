@@ -15,6 +15,12 @@ pkg:
 	docker push ${BUILD_HOST}/${NAME}:latest
 	# trivy image ${NAME}:${TAG}
 
+lint:
+	uv run --no-group infer mypy .
+
+install_dev:
+	uv sync --no-group infer
+
 install:
 	uv sync
 

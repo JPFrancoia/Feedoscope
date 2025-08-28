@@ -1,41 +1,19 @@
 import asyncio
 import json
 import logging
-import re
 
 from bs4 import BeautifulSoup
-from cleantext import clean
-from llama_cpp import Llama
+from cleantext import clean  # type: ignore[import]
+from llama_cpp import Llama  # type: ignore[import]
+from pydantic import ValidationError
 
 from custom_logging import init_logging
-from feedoscope import config
+from feedoscope import config, utils
 from feedoscope.data_registry import data_registry as dr
+from feedoscope.entities import Article, TimeSensitivity
 
 logger = logging.getLogger(__name__)
 
-
-PROMPT = """
-INST]
-You are a news analyst AI. Your task is to rate the time-sensitivity of a news article on a scale of 1 to 5.
-
-Time-sensitivity is defined as how quickly information loses its primary relevance, NOT its overall importance.
-
-**Rating Scale Definitions:**
-- **1 (Evergreen):** Content is historical, biographical, or a foundational explainer. Keywords: "history of", "profile", "explainer", "deep dive".
-- **2 (Low):** A feature, trend analysis, or opinion piece relevant for months. Keywords: "analysis", "opinion", "trend", "culture".
-- **3 (Medium):** Story tied to an ongoing but not breaking event, relevant for days/weeks. Keywords: "debate", "upcoming", "policy", "investigation".
-- **4 (High):** Reports on a specific, recent event; loses relevance in 24-48 hours. Keywords: "announces", "reports", "wins", "results", "verdict".
-- **5 (Critical):** Live coverage of a rapidly unfolding event; loses relevance in hours. Keywords: "live", "breaking", "unfolding", "evacuation", "alert".
-
-**Instructions:**
-Analyze the article above. Your response MUST be a single integer from 1 to 5. Do not provide any other text, labels, or markdown formatting. Your entire response should be only the number.
-
-**Article Information:**
-Title: {{headline}}
-Summary: {{article_summary_or_first_paragraph}}
-
-[/INST]
-"""
 
 PROMPT = """
 [INST]
@@ -68,39 +46,37 @@ Summary: {{article_summary_or_first_paragraph}}
 """
 
 
+MODEL_PATH = "./mistral/Ministral-8B-Instruct-2410-Q6_K_L.gguf"
+MAX_CONTENT_LENGTH = 1024
+
+
 def strip_html_keep_text(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text(separator=" ", strip=True)
     return " ".join(text.split())
 
 
-def prepare_content(content: str, llm) -> str:
+def prepare_content(content: str, llm: Llama) -> str:
     content = clean(strip_html_keep_text(content))
-    tokens = llm.tokenize(content.encode("utf-8")[:1024])
-    truncated_tokens = tokens[:512]
-    return llm.detokenize(truncated_tokens).decode("utf-8", errors="ignore")
+
+    # Once sanitized, we truncate the content to fit within the model's token limit.
+    # We cut by chars so if we cut to 1024 chars and the model's window is 1024
+    # tokens, we are sure to fit.
+    tokens = llm.tokenize(content.encode("utf-8")[:MAX_CONTENT_LENGTH])
+
+    return llm.detokenize(tokens).decode("utf-8", errors="ignore")
 
 
-async def main() -> None:
+async def infer(recent_unread_articles: list[Article]) -> list[TimeSensitivity]:
+    llm = Llama(model_path=MODEL_PATH, n_gpu_layers=-1, verbose=False, n_ctx=1024)
 
-    model_path = "./mistral/Ministral-8B-Instruct-2410-Q6_K_L.gguf"
-    llm = Llama(model_path=model_path, n_gpu_layers=-1, verbose=False, n_ctx=1024)
-
-    await dr.global_pool.open(wait=True)
-
-    recent_unread_articles = await dr.get_previous_days_articles_wo_time_sensitivity(
-        number_of_days=14
-    )
-
-    # FIXME: type this
-    time_sensitivities: list[dict] = []
+    time_sensitivities: list[TimeSensitivity] = []
 
     for article in recent_unread_articles:
-        title = re.sub(r"^\[[^]]*\]\s*", "", article["title"])
-        final_prompt = PROMPT.replace("{{headline}}", title)
+        final_prompt = PROMPT.replace("{{headline}}", utils.clean_title(article.title))
         final_prompt = final_prompt.replace(
             "{{article_summary_or_first_paragraph}}",
-            prepare_content(article["content"], llm),
+            prepare_content(article.content, llm),
         )
 
         output = llm(
@@ -113,24 +89,39 @@ async def main() -> None:
 
         try:
             parsed_result = json.loads(result)
-            parsed_result["article_id"] = article["article_id"]
+            parsed_result["article_id"] = article.article_id
+            sensitivity = TimeSensitivity(**parsed_result)
         except json.JSONDecodeError:
             logger.error(f"Failed to parse JSON from LLM output: {result}")
             continue
+        except ValidationError:
+            logger.exception(f"Validation error for article {article.title}")
+            continue
 
-        time_sensitivities.append(parsed_result)
+        time_sensitivities.append(sensitivity)
 
-        logger.debug(f"Article: {title}, data: {parsed_result}")
+        logger.debug(f"Article: {article.title}, data: {sensitivity}")
 
-        # TODO: assign labels to the article, into the database
+    return time_sensitivities
+
+
+async def main() -> None:
+
+    await dr.global_pool.open(wait=True)
+
+    recent_unread_articles = await dr.get_previous_days_articles_wo_time_sensitivity(
+        number_of_days=14
+    )
+
+    time_sensitivities = await infer(recent_unread_articles)
+
+    # TODO: assign labels to the article, into the database
 
     if time_sensitivities:
         await dr.register_time_sensitivity_for_articles(time_sensitivities)
         logger.info(
             f"Registered time sensitivities for {len(time_sensitivities)} articles."
         )
-
-    # FIXME: return scores too
 
 
 if __name__ == "__main__":

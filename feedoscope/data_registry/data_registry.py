@@ -8,7 +8,7 @@ from psycopg.rows import dict_row, DictRow
 from psycopg_pool import AsyncConnectionPool
 
 from feedoscope import config
-from feedoscope.entities import Article
+from feedoscope.entities import Article, TimeSensitivity
 
 logger = logging.getLogger(__name__)
 
@@ -227,7 +227,7 @@ async def update_scores(
 # WARNING: this returns a different article format than the other functions
 async def get_previous_days_articles_wo_time_sensitivity(
     number_of_days: int = 14,
-) -> list[dict[str, Any]]:
+) -> list[Article]:
     query = _get_query_from_file("get_previous_days_wo_time_sensitivity_articles.sql")
 
     async with global_pool.connection() as conn, conn.cursor() as cur:
@@ -237,11 +237,11 @@ async def get_previous_days_articles_wo_time_sensitivity(
         )
         data = await cur.fetchall()
 
-    return data
+    return [Article(**article) for article in data]
 
 
 async def register_time_sensitivity_for_articles(
-    time_sensitivities: list[dict],
+    time_sensitivities: list[TimeSensitivity],
 ) -> None:
     query = _get_query_from_file("register_time_sensitivity_for_articles.sql")
 
@@ -252,12 +252,9 @@ async def register_time_sensitivity_for_articles(
     ):
         for sensitivity in time_sensitivities:
             row = (
-                sensitivity["article_id"],
-                sensitivity["score"],
-                sensitivity["confidence"],
-                sensitivity["explanation"],
+                sensitivity.article_id,
+                sensitivity.score,
+                sensitivity.confidence,
+                sensitivity.explanation,
             )
             await copy.write_row(row)
-
-
-# TODO: create model for time sensitivity payload

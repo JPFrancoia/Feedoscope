@@ -13,7 +13,7 @@ from transformers import (
 from custom_logging import init_logging
 from feedoscope import config, utils
 from feedoscope.data_registry import data_registry as dr
-from feedoscope.entities import RelevanceInferenceResults
+from feedoscope.entities import RelevanceInferenceResults, Article
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,8 @@ def find_latest_model(model_name: str) -> str:
     return os.path.join(saved_models_dir, latest_model)
 
 
-async def main(write_scores_to_db: bool = True) -> RelevanceInferenceResults:
+async def infer(recent_unread_articles: list[Article]) -> RelevanceInferenceResults:
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
 
@@ -50,20 +51,13 @@ async def main(write_scores_to_db: bool = True) -> RelevanceInferenceResults:
         logger.critical(mes)
         raise RuntimeError(mes)
 
-    start_time = time.time()
-
     model_path = find_latest_model(MODEL_NAME.replace("/", "-"))
 
     logger.info(f"Loading model from {model_path}")
     model = AutoModelForSequenceClassification.from_pretrained(model_path)
     model.to(device)  # Move model to GPU if available
 
-    await dr.global_pool.open(wait=True)
-
-    recent_unread_articles = await dr.get_previous_days_unread_articles()
     articles_text = utils.prepare_articles_text(recent_unread_articles)
-
-    logger.debug(f"Collected {len(recent_unread_articles)} recent unread articles.")
 
     logger.debug("Tokenizing articles for inference...")
 
@@ -103,28 +97,37 @@ async def main(write_scores_to_db: bool = True) -> RelevanceInferenceResults:
         for score, article in zip(probs, recent_unread_articles)
     ]
 
-    if write_scores_to_db:
-        await dr.update_scores(
-            article_ids=article_ids,
-            article_titles=article_titles,
-            scores=probs,
-        )
-        logger.debug(f"Scores updated in the database for {len(article_ids)} articles.")
-    else:
-        logger.debug("Skipping database update as per configuration.")
+    return RelevanceInferenceResults(
+        article_ids=article_ids,
+        article_titles=article_titles,
+        scores=probs,
+    )
 
-    await dr.global_pool.close()
+
+async def main(write_scores_to_db: bool = True) -> None:
+    await dr.global_pool.open(wait=True)
+
+    recent_unread_articles = await dr.get_previous_days_unread_articles()
+
+    logger.debug(f"Collected {len(recent_unread_articles)} recent unread articles.")
+
+    start_time = time.time()
+
+    results = await infer(recent_unread_articles)
 
     elapsed_time = time.time() - start_time
     logger.info(
         f"Inference completed in {elapsed_time:.2f} seconds for {len(recent_unread_articles)} articles."
     )
 
-    return RelevanceInferenceResults(
-        article_ids=article_ids,
-        article_titles=article_titles,
-        scores=probs,
+    await dr.update_scores(
+        article_ids=results.article_ids,
+        article_titles=results.article_titles,
+        scores=results.scores,
     )
+    logger.debug(f"Scores updated in the database for {len(results.article_ids)} articles.")
+
+    await dr.global_pool.close()
 
 
 if __name__ == "__main__":
