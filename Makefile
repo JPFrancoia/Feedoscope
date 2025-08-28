@@ -30,6 +30,9 @@ train:
 infer:
 	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.llm_infer
 
+time:
+	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.infer_time_sensitivity
+
 up:
 	migrate -database ${DATABASE_URL} -path db/migrations up 1
 
