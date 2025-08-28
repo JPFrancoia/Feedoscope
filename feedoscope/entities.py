@@ -1,5 +1,5 @@
 from enum import StrEnum, unique
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, NaiveDatetime
 
@@ -33,6 +33,6 @@ class RelevanceInferenceResults(BaseModel):
 
 class TimeSensitivity(BaseModel):
     article_id: int
-    score: int = Field(ge=1, le=5)
+    score: Literal[1, 2, 3, 4, 5]
     confidence: ConfidenceLevel
     explanation: str

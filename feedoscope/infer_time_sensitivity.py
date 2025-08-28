@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from typing import Any
 
 from bs4 import BeautifulSoup
 from cleantext import clean  # type: ignore[import]
@@ -67,6 +68,16 @@ def prepare_content(content: str, llm: Llama) -> str:
     return llm.detokenize(tokens).decode("utf-8", errors="ignore")
 
 
+def best_effort_json_parse(result: str) -> dict[str, Any]:
+
+    result = result.replace("```json\n", "").replace("\n```", "").strip()
+
+    # sometimes the output contains ```json at the beginning, or ``` at the end
+    # We should try to clean that up before parsing the JSON
+    return json.loads(result)
+
+
+
 async def infer(recent_unread_articles: list[Article]) -> list[TimeSensitivity]:
     llm = Llama(model_path=MODEL_PATH, n_gpu_layers=-1, verbose=False, n_ctx=1024)
 
@@ -88,7 +99,7 @@ async def infer(recent_unread_articles: list[Article]) -> list[TimeSensitivity]:
         result = output.get("choices")[0]["text"]
 
         try:
-            parsed_result = json.loads(result)
+            parsed_result = best_effort_json_parse(result)
             parsed_result["article_id"] = article.article_id
             sensitivity = TimeSensitivity(**parsed_result)
         except json.JSONDecodeError:
