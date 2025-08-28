@@ -12,7 +12,7 @@ select
     array_agg(distinct l.caption) filter (where l.caption is not null), array[]::text[] as labels,
     array_agg(distinct t.tag_name) filter (where t.tag_name is not null), array[]::text[] as tags
 from
-    join ttrss_user_entries ue on e.id = ue.ref_id
+    ttrss_user_entries ue on e.id = ue.ref_id
     join ttrss_feeds f on ue.feed_id = f.id
     left join ttrss_user_labels2 ul on e.id = ul.article_id
     left join ttrss_labels2 l on ul.label_id = l.id
