@@ -368,7 +368,6 @@ dependencies = [
     { name = "datasets" },
     { name = "evaluate" },
     { name = "joblib" },
-    { name = "llama-cpp-python" },
     { name = "pandas" },
     { name = "psycopg" },
     { name = "psycopg-pool" },
@@ -393,6 +392,9 @@ dev = [
     { name = "ruff" },
     { name = "types-tqdm" },
 ]
+infer = [
+    { name = "llama-cpp-python" },
+]
 train = [
     { name = "transformers", extra = ["torch"] },
 ]
@@ -404,7 +406,6 @@ requires-dist = [
     { name = "datasets", specifier = ">=4.0.0" },
     { name = "evaluate", specifier = ">=0.4.5" },
     { name = "joblib", specifier = ">=1.5.1,<2.0.0" },
-    { name = "llama-cpp-python", specifier = ">=0.3.16" },
     { name = "pandas", specifier = ">=2.3.1" },
     { name = "psycopg", specifier = ">=3.2.9,<4.0.0" },
     { name = "psycopg-pool", specifier = ">=3.2.6,<4.0.0" },
@@ -429,6 +430,7 @@ dev = [
     { name = "ruff", specifier = ">=0.12.2" },
     { name = "types-tqdm", specifier = ">=4.67.0.20250516" },
 ]
+infer = [{ name = "llama-cpp-python", specifier = ">=0.3.16" }]
 train = [{ name = "transformers", extras = ["torch"], specifier = ">=4.55.0" }]
 
 [[package]]
