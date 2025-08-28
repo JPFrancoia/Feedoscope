@@ -33,6 +33,9 @@ class RelevanceInferenceResults(BaseModel):
 
 class TimeSensitivity(BaseModel):
     article_id: int
+
+    # 1 is not time-sensitive at all, 5 is extremely time-sensitive
     score: Literal[1, 2, 3, 4, 5]
+
     confidence: ConfidenceLevel
     explanation: str

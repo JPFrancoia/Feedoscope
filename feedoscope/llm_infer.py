@@ -104,7 +104,7 @@ async def infer(recent_unread_articles: list[Article]) -> RelevanceInferenceResu
     )
 
 
-async def main(write_scores_to_db: bool = True) -> None:
+async def main() -> None:
     await dr.global_pool.open(wait=True)
 
     recent_unread_articles = await dr.get_previous_days_unread_articles()

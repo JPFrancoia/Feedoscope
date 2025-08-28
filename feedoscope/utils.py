@@ -15,8 +15,7 @@ def strip_html_keep_text(html: str) -> str:
 def prepare_articles_text(articles: list[Article]) -> list[str]:
     """Sanitize and prepare article texts for embedding computation.
 
-    WARNING: This function modifies the input articles in place by cleaning the
-    title from any score computed in a previous evaluation.
+    This function shouldn't mutate the articles in any way.
 
     Args:
         articles: List of articles
@@ -32,8 +31,8 @@ def prepare_articles_text(articles: list[Article]) -> list[str]:
 
         # TODO: double check we're not nuking the content of html tags
 
-        a.title = clean_title(a.title)
-        text = clean(strip_html_keep_text(f"{a.title} {a.content}"))
+        title = clean_title(a.title)
+        text = clean(strip_html_keep_text(f"{title} {a.content}"))
         texts.append(text)
 
     return texts
@@ -43,7 +42,7 @@ def clean_title(title: str) -> str:
     """Clean the title from any score computed in a previous evaluation.
 
     Example:
-        "[85] This is an article title" -> "This is an article title"
+        "[85] This is an article title (TS: 4)" -> "This is an article title"
 
     Args:
         title: The article title.
@@ -51,4 +50,7 @@ def clean_title(title: str) -> str:
     Returns:
         The cleaned title.
     """
-    return re.sub(r"^\[[^]]*\]\s*", "", title)
+    new_title = re.sub(r"^\[[^]]*\]\s*", "", title)
+    new_title = re.sub(r"\s*\(TS:\s*\d+\)\s*$", "", new_title)
+
+    return new_title
