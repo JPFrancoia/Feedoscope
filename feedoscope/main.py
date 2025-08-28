@@ -55,6 +55,11 @@ async def main() -> None:
     # Get articles that are unread from the last N days.
     articles = await dr.get_previous_days_unread_articles(number_of_days=LOOKBACK_DAYS)
 
+    # Remove past scores and time sensitivity from titles.
+    # This should be done in llm_infer.infer as well, but better safe than sorry
+    for art in articles:
+        art.title = clean_title(art.title)
+
     logger.info("Starting inference for relevance scores...")
     relevance_scores = await llm_infer.infer(articles)
 

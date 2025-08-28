@@ -24,7 +24,7 @@ trap cleanup EXIT
 
 case "$1" in
   infer)
-    make llm_infer
+    make full_infer
     ;;
   train)
     make llm_train

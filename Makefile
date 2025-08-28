@@ -33,7 +33,7 @@ infer:
 time:
 	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.infer_time_sensitivity
 
-full_run:
+full_infer:
 	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.main
 
 up:
