@@ -169,7 +169,7 @@ async def get_sample_not_good(validation_size: int) -> list[Article]:
 
 
 async def get_previous_days_unread_articles(
-    number_of_days: int = 14, w_time_sensitivity: bool = False
+    number_of_days: int = 14
 ) -> list[Article]:
     """Get unread articles from the previous X days.
 
@@ -179,9 +179,6 @@ async def get_previous_days_unread_articles(
 
     Args:
         number_of_days: Number of days to look back for unread articles.
-        w_time_sensitivity: Whether to include only articles with time sensitivity.
-            If True, only articles with time sensitivity are returned. If False,
-            all unread articles are returned.
 
     Returns:
         A list of unread articles from the previous X days.
@@ -194,7 +191,6 @@ async def get_previous_days_unread_articles(
             query,
             {
                 "number_of_days": number_of_days,
-                "w_time_sensitivity": w_time_sensitivity,
             },
         )
         data = await cur.fetchall()

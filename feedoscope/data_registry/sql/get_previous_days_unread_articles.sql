@@ -9,6 +9,7 @@ select
     e.author,
     e.date_entered,
     ue.last_read,
+    ts.score as time_sensitivity_score,
     array_agg(distinct l.caption) filter (where l.caption is not null), array[]::text[] as labels,
     array_agg(distinct t.tag_name) filter (where t.tag_name is not null), array[]::text[] as tags
 from
@@ -18,21 +19,12 @@ from
     left join ttrss_user_labels2 ul on e.id = ul.article_id
     left join ttrss_labels2 l on ul.label_id = l.id
     left join ttrss_tags t on ue.int_id = t.post_int_id
+    left join time_sensitivity ts on ts.article_id = e.id
 where
     ue.published = false
     and (ue.marked = false
         and ue.unread = true)
     and e.date_entered >= now() - interval '1 day' * %(number_of_days)s
-    and (
-        case when %(w_time_sensitivity)s then
-            exists (
-                select 1 from time_sensitivity ts
-                where ts.article_id = e.id
-            )
-        else
-            true
-        end
-    )
 group by
     e.id,
     e.title,

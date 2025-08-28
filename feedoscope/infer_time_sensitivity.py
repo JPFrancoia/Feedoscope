@@ -116,12 +116,12 @@ async def infer(recent_unread_articles: list[Article]) -> list[TimeSensitivity]:
     return time_sensitivities
 
 
-async def main() -> None:
+async def main(number_of_days: int = 14) -> None:
 
     await dr.global_pool.open(wait=True)
 
     recent_unread_articles = await dr.get_previous_days_articles_wo_time_sensitivity(
-        number_of_days=14
+        number_of_days=number_of_days
     )
 
     time_sensitivities = await infer(recent_unread_articles)

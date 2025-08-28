@@ -45,14 +45,12 @@ def decay_relevance_score(
 async def main() -> None:
     await dr.global_pool.open(wait=True)
 
-    # Get articles that DO NOT have time sensitivity yet.
-    # If this script is run regularly, this should be a small number.
-    articles = await dr.get_previous_days_articles_wo_time_sensitivity(
-        number_of_days=LOOKBACK_DAYS
-    )
-
+    # Different behaviour than for relevance scoring (we use the module's main
+    # function directly instead of infer). This function will also write the time
+    # sensitivity into the database. This is because the time sensitivity a) takes
+    # time to infer and b) doesn't change once determined.
     logger.info("Starting inference for time sensitivity...")
-    time_sensitivities = await infer_time_sensitivity.infer(articles)
+    await infer_time_sensitivity.main(LOOKBACK_DAYS)
 
     # Get articles that are unread from the last N days.
     articles = await dr.get_previous_days_unread_articles(number_of_days=LOOKBACK_DAYS)
@@ -62,24 +60,32 @@ async def main() -> None:
 
     for idx in range(len(articles)):
         # Make sure the order of the articles is the same.
-        # If not, one of the infer functions returned articles in a different order.
-        assert (
-            articles[idx].article_id
-            == relevance_scores.article_ids[idx]
-            == time_sensitivities[idx].article_id
-        )
+        assert articles[idx].article_id == relevance_scores.article_ids[idx]
 
-        decayed_score = decay_relevance_score(
-            original_score=relevance_scores.scores[idx],
-            date_entered=articles[idx].date_entered,
-            time_sensitivity=time_sensitivities[idx].score,
-        )
+        # If we don't have a time sensitivity score, just use the raw relevance score.
+        # It might be because we haven't computed the time sensitivity yet, or
+        # because there was a problem. Relevance alone is better than nothing.
+        if articles[idx].time_sensitivity_score is None:
+            decayed_score = relevance_scores.scores[idx]
+            logger.warning(
+                f"Article {articles[idx].article_id} has no time sensitivity score. Skipping decay."
+            )
+            relevance_scores.article_titles[idx] = (
+                f"[{decayed_score}] "
+                f"{articles[idx].title} "
+            )
+        else:
+            decayed_score = decay_relevance_score(
+                original_score=relevance_scores.scores[idx],
+                date_entered=articles[idx].date_entered,
+                time_sensitivity=articles[idx].time_sensitivity_score,  # type: ignore
+            )
+            relevance_scores.article_titles[idx] = (
+                f"[{decayed_score}] "
+                f"{articles[idx].title} "
+                f"(TS: {articles[idx].time_sensitivity_score})"
+            )
 
-        relevance_scores.article_titles[idx] = (
-            f"[{decayed_score}] "
-            f"{articles[idx].title} "
-            f"(TS: {time_sensitivities[idx].score})"
-        )
         relevance_scores.scores[idx] = decayed_score
 
     await dr.update_scores(

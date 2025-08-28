@@ -21,6 +21,7 @@ class Article(BaseModel):
     author: str
     date_entered: NaiveDatetime
     last_read: Optional[NaiveDatetime] = Field(...)
+    time_sensitivity_score: Optional[Literal[1, 2, 3, 4, 5]] = Field(...)
     labels: list[str]
     tags: list[str]
 
