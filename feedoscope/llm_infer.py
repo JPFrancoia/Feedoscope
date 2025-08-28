@@ -13,6 +13,7 @@ from transformers import (
 from custom_logging import init_logging
 from feedoscope import config, utils
 from feedoscope.data_registry import data_registry as dr
+from feedoscope.entities import RelevanceInferenceResults
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ def find_latest_model(model_name: str) -> str:
     return os.path.join(saved_models_dir, latest_model)
 
 
-async def main() -> None:
+async def main(write_scores_to_db: bool = True) -> RelevanceInferenceResults:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
 
@@ -50,8 +51,6 @@ async def main() -> None:
         raise RuntimeError(mes)
 
     start_time = time.time()
-
-    # TODO: run time sensitivity inference here first
 
     model_path = find_latest_model(MODEL_NAME.replace("/", "-"))
 
@@ -81,7 +80,7 @@ async def main() -> None:
 
     logger.debug("Inferencing...")
 
-    all_probs = []
+    all_probs: list[np.ndarray] = []
     model.eval()
     with torch.no_grad():
         for start in range(0, len(articles_text), INFERENCE_BATCH_SIZE):
@@ -96,29 +95,35 @@ async def main() -> None:
 
     logger.debug("Inference completed successfully.")
 
-    probs = np.round(np.array(all_probs) * 100).astype(int)
+    probs = np.round(np.array(all_probs) * 100).astype(int).tolist()
 
-    article_ids = [article["article_id"] for article in recent_unread_articles]
+    article_ids = [article.article_id for article in recent_unread_articles]
     article_titles = [
-        f"[{score}] {article['title']}"
+        f"[{score}] {article.title}"
         for score, article in zip(probs, recent_unread_articles)
     ]
 
-    # FIXME: just return scores, don't write to DB
-
-    await dr.update_scores(
-        article_ids=article_ids,
-        article_titles=article_titles,
-        scores=probs,
-    )
-
-    logger.debug(f"Scores updated in the database for {len(article_ids)} articles.")
+    if write_scores_to_db:
+        await dr.update_scores(
+            article_ids=article_ids,
+            article_titles=article_titles,
+            scores=probs,
+        )
+        logger.debug(f"Scores updated in the database for {len(article_ids)} articles.")
+    else:
+        logger.debug("Skipping database update as per configuration.")
 
     await dr.global_pool.close()
 
     elapsed_time = time.time() - start_time
     logger.info(
         f"Inference completed in {elapsed_time:.2f} seconds for {len(recent_unread_articles)} articles."
+    )
+
+    return RelevanceInferenceResults(
+        article_ids=article_ids,
+        article_titles=article_titles,
+        scores=probs,
     )
 
 
