@@ -2,11 +2,6 @@ BUILD_HOST=192.168.0.13:32000
 NAME=feedoscope
 TAG=$(shell git log -1 --pretty=%h)
 
-train:
-	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.pu_learn
-
-llm_train:
-	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.llm_learn
 
 pkg:
 	echo "Tag: " ${TAG}
@@ -23,10 +18,10 @@ pkg:
 install:
 	uv sync
 
-infer:
-	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.infer
+train:
+	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.llm_learn
 
-llm_infer:
+infer:
 	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.llm_infer
 
 up:

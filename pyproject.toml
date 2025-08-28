@@ -42,7 +42,7 @@ infer = [
 ]
 
 [tool.uv]
-default-groups = ["dev"]
+default-groups = ["dev", "train", "infer"]
 
 [tool.uv.sources]
 microsoft-python-type-stubs = { git = "https://github.com/microsoft/python-type-stubs.git" }

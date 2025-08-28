@@ -9,8 +9,8 @@ with numbered_articles as (
         e.author,
         e.date_entered,
         ue.last_read,
-        STRING_AGG(distinct l.caption, ', ') as labels,
-        STRING_AGG(distinct t.tag_name, ', ') as tags,
+        array_agg(distinct l.caption) filter (where l.caption is not null), array[]::text[] as labels,
+        array_agg(distinct t.tag_name) filter (where t.tag_name is not null), array[]::text[] as tags
         row_number() over (order by e.id asc) as rn
     from
         ttrss_entries e

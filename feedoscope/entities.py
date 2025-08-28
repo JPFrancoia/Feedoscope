@@ -1,20 +1,18 @@
-from pydantic import BaseModel, AwareDatetime
+from pydantic import BaseModel, NaiveDatetime
 
 
 class Article(BaseModel):
     article_id: int
     title: str
     marked: bool
-    feed_title: str
+    feed_name: str
     content: str
     link: str
     author: str
-    date_entered: AwareDatetime
-    last_read: AwareDatetime
-
-    # FIXME: we can do better and get a list of str from the database
-    labels: str
-    tags: str
+    date_entered: NaiveDatetime
+    last_read: NaiveDatetime | None = ...
+    labels: list[str]
+    tags: list[str]
 
 
 class RelevanceInferenceResults(BaseModel):
