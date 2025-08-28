@@ -19,13 +19,13 @@ logger = logging.getLogger(__name__)
 
 DECAY_RATES = {
     1: 0,  # No decay
-    2: 0.0019,  # Half-life of 365 days
-    3: 0.0154,  # Half-life of 45 days
+    2: 0.0154,  # Half-life of 45 days
+    3: 0.0347,  # Half-life of 20 days
     4: 0.0693,  # Half-life of 10 days
     5: 0.1386,  # Half-life of 5 days
 }
 
-LOOKBACK_DAYS = 14
+LOOKBACK_DAYS = 45
 
 
 def decay_relevance_score(
