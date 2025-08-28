@@ -92,6 +92,7 @@ async def main() -> None:
         number_of_days=14
     )
 
+    # FIXME: type this
     time_sensitivities: list[dict] = []
 
     for article in recent_unread_articles:
@@ -128,6 +129,8 @@ async def main() -> None:
         logger.info(
             f"Registered time sensitivities for {len(time_sensitivities)} articles."
         )
+
+    # FIXME: return scores too
 
 
 if __name__ == "__main__":

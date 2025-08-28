@@ -6,7 +6,7 @@ from typing import Any, LiteralString, cast
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
-from feedoscope import config
+from feedoscope import config, entities
 
 logger = logging.getLogger(__name__)
 

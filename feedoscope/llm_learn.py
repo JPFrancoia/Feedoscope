@@ -189,8 +189,6 @@ async def main() -> None:
                 f"Model not found or corrupted at {model_path}. The model's directory has been deleted."
             )
 
-        # TODO: use storage class with 2 nodes only
-
     else:
         logger.info("Training new model...")
         trainer = await train_model(model_path, tokenizer, good_articles, bad_articles)

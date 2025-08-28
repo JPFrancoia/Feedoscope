@@ -23,10 +23,6 @@ MAX_LENGTH = 512  # Maximum length for the tokenizer
 INFERENCE_BATCH_SIZE = 128
 
 
-def preprocess_function(tokenizer, examples, max_length):
-    return tokenizer(examples["text"], truncation=True, max_length=max_length)
-
-
 def find_latest_model(model_name: str) -> str:
     # iterate through the saved models directory. Look for the model starting with
     # the model_name. sort by name and return the latest one.
@@ -54,6 +50,8 @@ async def main() -> None:
         raise RuntimeError(mes)
 
     start_time = time.time()
+
+    # TODO: run time sensitivity inference here first
 
     model_path = find_latest_model(MODEL_NAME.replace("/", "-"))
 
@@ -105,6 +103,8 @@ async def main() -> None:
         f"[{score}] {article['title']}"
         for score, article in zip(probs, recent_unread_articles)
     ]
+
+    # FIXME: just return scores, don't write to DB
 
     await dr.update_scores(
         article_ids=article_ids,
