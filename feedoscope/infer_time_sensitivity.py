@@ -83,7 +83,7 @@ async def infer(recent_unread_articles: list[Article]) -> list[TimeSensitivity]:
 
     time_sensitivities: list[TimeSensitivity] = []
 
-    for article in recent_unread_articles:
+    for idx, article in enumerate(recent_unread_articles, start=1):
         final_prompt = PROMPT.replace("{{headline}}", utils.clean_title(article.title))
         final_prompt = final_prompt.replace(
             "{{article_summary_or_first_paragraph}}",
@@ -111,7 +111,7 @@ async def infer(recent_unread_articles: list[Article]) -> list[TimeSensitivity]:
 
         time_sensitivities.append(sensitivity)
 
-        logger.debug(f"Article: {article.title}, data: {sensitivity}")
+        logger.debug(f"{idx}/{len(recent_unread_articles)} Article: {article.title}, data: {sensitivity}")
 
     return time_sensitivities
 

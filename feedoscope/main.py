@@ -25,7 +25,7 @@ DECAY_RATES = {
     5: 0.1386,  # Half-life of 5 days
 }
 
-LOOKBACK_DAYS = 45
+LOOKBACK_DAYS = 135
 
 
 def decay_relevance_score(
