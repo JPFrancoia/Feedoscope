@@ -2,9 +2,9 @@ import asyncio
 import logging
 import os
 import time
+from typing import Any
 
-from datasets import Dataset
-import joblib
+from datasets import Dataset  # type: ignore[import]
 import numpy as np
 from sklearn.metrics import (
     accuracy_score,
@@ -23,14 +23,18 @@ from transformers import (
     AutoTokenizer,
     DataCollatorWithPadding,
     EarlyStoppingCallback,
+    PreTrainedTokenizerBase,
     Trainer,
     TrainerCallback,
     TrainingArguments,
 )
+from transformers.tokenization_utils_base import BatchEncoding
+from transformers.trainer_utils import EvalPrediction
 
 from custom_logging import init_logging
 from feedoscope import config, utils
 from feedoscope.data_registry import data_registry as dr
+from feedoscope.entities import Article
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +55,7 @@ BATCH_SIZE = 16  # Batch size for training
 # BATCH_SIZE = 8  # Batch size for training
 
 
-def compute_metrics(eval_pred):
+def compute_metrics(eval_pred: EvalPrediction) -> dict[str, float | np.floating]:
     logits, labels = eval_pred
     # Apply sigmoid to convert logits to probabilities
     positive_class_probs = torch.sigmoid(torch.tensor(logits)[:, 1]).numpy()
@@ -74,7 +78,9 @@ def compute_metrics(eval_pred):
     }
 
 
-def preprocess_function(tokenizer, examples, max_length):
+def preprocess_function(
+    tokenizer: PreTrainedTokenizerBase, examples: dict[str, list[Any]], max_length: int
+) -> BatchEncoding:
     return tokenizer(examples["text"], truncation=True, max_length=max_length)
 
 
@@ -88,7 +94,10 @@ class ProgressLoggingCallback(TrainerCallback):
 
 
 async def train_model(
-    model_path: str, tokenizer: AutoTokenizer, good_articles, bad_articles
+    model_path: str,
+    tokenizer: PreTrainedTokenizerBase,
+    good_articles: list[Article],
+    bad_articles: list[Article],
 ) -> Trainer:
 
     all_articles = utils.prepare_articles_text(good_articles + bad_articles)
@@ -96,7 +105,7 @@ async def train_model(
 
     # Create Hugging Face Dataset
     dataset = Dataset.from_list(
-        [{"text": t, "label": l} for t, l in zip(all_articles, labels)]
+        [{"text": text, "label": label} for text, label in zip(all_articles, labels)]
     )
     split_dataset = dataset.train_test_split(test_size=0.2, seed=42)
 

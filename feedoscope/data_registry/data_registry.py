@@ -3,17 +3,22 @@ from importlib.resources import files
 import logging
 from typing import Any, LiteralString, cast
 
-from psycopg.rows import dict_row
+from psycopg import AsyncConnection
+from psycopg.rows import dict_row, DictRow
 from psycopg_pool import AsyncConnectionPool
 
-from feedoscope import config, entities
+from feedoscope import config
+from feedoscope.entities import Article
 
 logger = logging.getLogger(__name__)
 
 
+# For explanation about type hinting, see:
+# https://www.psycopg.org/psycopg3/docs/advanced/typing.html#generic-pool-types
 global_pool = AsyncConnectionPool(
     config.DATABASE_URL,
     open=False,
+    connection_class=AsyncConnection[DictRow],  # provides type hints
     kwargs={
         "row_factory": dict_row,
     },
@@ -35,7 +40,7 @@ def _get_query_from_file(filename: str) -> LiteralString:
 
 async def get_read_articles_training(
     validation_size: int = 100,
-) -> list[dict[str, Any]]:
+) -> list[Article]:
     """Get read articles for training.
 
     These articles are consdered "good", aka "interesting" by the user.
@@ -59,10 +64,10 @@ async def get_read_articles_training(
         )
         data = await cur.fetchall()
 
-    return data
+    return [Article(**article) for article in data]
 
 
-async def get_unread_articles_training() -> list[dict[str, Any]]:
+async def get_unread_articles_training() -> list[Article]:
     """Get unread articles for training.
 
     These articles are considered unlabelled, they could be good or bad.
@@ -84,10 +89,10 @@ async def get_unread_articles_training() -> list[dict[str, Any]]:
         )
         data = await cur.fetchall()
 
-    return data
+    return [Article(**article) for article in data]
 
 
-async def get_published_articles(validation_size: int = 0) -> list[dict[str, Any]]:
+async def get_published_articles(validation_size: int = 0) -> list[Article]:
     """Fetch published articles.
 
     Published articles are considered "bad", aka "not interesting" by the user.
@@ -113,10 +118,10 @@ async def get_published_articles(validation_size: int = 0) -> list[dict[str, Any
         )
         data = await cur.fetchall()
 
-    return data
+    return [Article(**article) for article in data]
 
 
-async def get_sample_good(validation_size: int) -> list[dict[str, Any]]:
+async def get_sample_good(validation_size: int) -> list[Article]:
     """Get a sample of good articles for validation.
 
     Args:
@@ -138,10 +143,10 @@ async def get_sample_good(validation_size: int) -> list[dict[str, Any]]:
         )
         data = await cur.fetchall()
 
-    return data
+    return [Article(**article) for article in data]
 
 
-async def get_sample_not_good(validation_size: int) -> list[dict[str, Any]]:
+async def get_sample_not_good(validation_size: int) -> list[Article]:
     """Get a sample of not good articles for validation.
 
     Args:
@@ -160,12 +165,12 @@ async def get_sample_not_good(validation_size: int) -> list[dict[str, Any]]:
         )
         data = await cur.fetchall()
 
-    return data
+    return [Article(**article) for article in data]
 
 
 async def get_previous_days_unread_articles(
     number_of_days: int = 14,
-) -> list[dict[str, Any]]:
+) -> list[Article]:
     """Get unread articles from the previous X days.
 
     This is used to fetch articles that are not read yet, but are still
@@ -185,7 +190,7 @@ async def get_previous_days_unread_articles(
         )
         data = await cur.fetchall()
 
-    return data
+    return [Article(**article) for article in data]
 
 
 async def update_scores(
@@ -255,5 +260,4 @@ async def register_time_sensitivity_for_articles(
             await copy.write_row(row)
 
 
-# TODO: create an Article model
 # TODO: create model for time sensitivity payload
