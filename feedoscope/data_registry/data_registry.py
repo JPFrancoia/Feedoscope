@@ -4,7 +4,7 @@ import logging
 from typing import Any, LiteralString, cast
 
 from psycopg import AsyncConnection
-from psycopg.rows import dict_row, DictRow
+from psycopg.rows import DictRow, dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from feedoscope import config
@@ -169,13 +169,19 @@ async def get_sample_not_good(validation_size: int) -> list[Article]:
 
 
 async def get_previous_days_unread_articles(
-    number_of_days: int = 14,
+    number_of_days: int = 14, w_time_sensitivity: bool = False
 ) -> list[Article]:
     """Get unread articles from the previous X days.
 
     This is used to fetch articles that are not read yet, but are still
     within the last X days.
     Only articles that are unread AND with a score of 0 are considered.
+
+    Args:
+        number_of_days: Number of days to look back for unread articles.
+        w_time_sensitivity: Whether to include only articles with time sensitivity.
+            If True, only articles with time sensitivity are returned. If False,
+            all unread articles are returned.
 
     Returns:
         A list of unread articles from the previous X days.
@@ -186,7 +192,10 @@ async def get_previous_days_unread_articles(
     async with global_pool.connection() as conn, conn.cursor() as cur:
         await cur.execute(
             query,
-            {"number_of_days": number_of_days},
+            {
+                "number_of_days": number_of_days,
+                "w_time_sensitivity": w_time_sensitivity,
+            },
         )
         data = await cur.fetchall()
 

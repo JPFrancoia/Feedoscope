@@ -25,6 +25,8 @@ DECAY_RATES = {
     5: 0.1386,  # Half-life of 5 days
 }
 
+LOOKBACK_DAYS = 14
+
 
 def decay_relevance_score(
     original_score: int,
@@ -42,38 +44,40 @@ def decay_relevance_score(
 
 async def main() -> None:
     await dr.global_pool.open(wait=True)
-    recent_unread_articles = await dr.get_previous_days_unread_articles()
 
-    # NOTE: normally time_sensitivity.infer and llm_infer should remove the
-    # scores (from previous runs) from the articles' titles, but we do it here
-    # also just in case (better safe than sorry).
-    for art in recent_unread_articles:
-        art.title = clean_title(art.title)
+    # Get articles that DO NOT have time sensitivity yet.
+    # If this script is run regularly, this should be a small number.
+    articles = await dr.get_previous_days_articles_wo_time_sensitivity(
+        number_of_days=LOOKBACK_DAYS
+    )
 
     logger.info("Starting inference for time sensitivity...")
-    time_sensitivities = await infer_time_sensitivity.infer(recent_unread_articles)
+    time_sensitivities = await infer_time_sensitivity.infer(articles)
+
+    # Get articles that are unread from the last N days.
+    articles = await dr.get_previous_days_unread_articles(number_of_days=LOOKBACK_DAYS)
 
     logger.info("Starting inference for relevance scores...")
-    relevance_scores = await llm_infer.infer(recent_unread_articles)
+    relevance_scores = await llm_infer.infer(articles)
 
-    for idx in range(len(recent_unread_articles)):
+    for idx in range(len(articles)):
         # Make sure the order of the articles is the same.
         # If not, one of the infer functions returned articles in a different order.
         assert (
-            recent_unread_articles[idx].article_id
+            articles[idx].article_id
             == relevance_scores.article_ids[idx]
             == time_sensitivities[idx].article_id
         )
 
         decayed_score = decay_relevance_score(
             original_score=relevance_scores.scores[idx],
-            date_entered=recent_unread_articles[idx].date_entered,
+            date_entered=articles[idx].date_entered,
             time_sensitivity=time_sensitivities[idx].score,
         )
 
         relevance_scores.article_titles[idx] = (
             f"[{decayed_score}] "
-            f"{recent_unread_articles[idx].title} "
+            f"{articles[idx].title} "
             f"(TS: {time_sensitivities[idx].score})"
         )
         relevance_scores.scores[idx] = decayed_score

@@ -23,6 +23,16 @@ where
     and (ue.marked = false
         and ue.unread = true)
     and e.date_entered >= now() - interval '1 day' * %(number_of_days)s
+    and (
+        case when %(w_time_sensitivity)s then
+            exists (
+                select 1 from time_sensitivity ts
+                where ts.article_id = e.id
+            )
+        else
+            true
+        end
+    )
 group by
     e.id,
     e.title,
