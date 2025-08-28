@@ -34,7 +34,8 @@ group by
     e.link,
     e.author,
     e.date_entered,
-    ue.last_read
+    ue.last_read,
+    ts.score
 order by
     e.id asc;
 

@@ -9,6 +9,7 @@ select
     e.author,
     e.date_entered,
     ue.last_read,
+    null as time_sensitivity_score,
     coalesce(array_agg(distinct l.caption) filter (where l.caption is not null), array[]::text[]) as labels,
     coalesce(array_agg(distinct t.tag_name) filter (where t.tag_name is not null), array[]::text[]) as tags
 from
