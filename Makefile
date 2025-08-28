@@ -33,6 +33,9 @@ infer:
 time:
 	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.infer_time_sensitivity
 
+full_run:
+	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.main
+
 up:
 	migrate -database ${DATABASE_URL} -path db/migrations up 1
 

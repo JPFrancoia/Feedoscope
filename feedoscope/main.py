@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime
+import logging
 import math
 from typing import Literal
 
@@ -49,7 +50,10 @@ async def main() -> None:
     for art in recent_unread_articles:
         art.title = clean_title(art.title)
 
+    logger.info("Starting inference for time sensitivity...")
     time_sensitivities = await infer_time_sensitivity.infer(recent_unread_articles)
+
+    logger.info("Starting inference for relevance scores...")
     relevance_scores = await llm_infer.infer(recent_unread_articles)
 
     for idx in range(len(recent_unread_articles)):
