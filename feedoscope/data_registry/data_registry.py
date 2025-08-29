@@ -198,6 +198,23 @@ async def get_previous_days_unread_articles(
     return [Article(**article) for article in data]
 
 
+def get_old_unread_articles(age_in_days: int = 30, sampling: int = 1500) -> list[Article]:
+
+    query = _get_query_from_file("get_old_unread_articles.sql")
+
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(
+            query,
+            {
+                "age_in_days": age_in_days,
+                "sampling": sampling,
+            },
+        )
+        data = await cur.fetchall()
+
+    return [Article(**article) for article in data]
+
+
 async def update_scores(
     article_ids: list[int], article_titles: list[str], scores: list[int]
 ) -> None:

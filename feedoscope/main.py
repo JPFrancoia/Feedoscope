@@ -25,7 +25,7 @@ DECAY_RATES = {
     5: 0.139,  # Half-life of 5 days
 }
 
-LOOKBACK_DAYS = 365
+LOOKBACK_DAYS = 45
 
 # TODO: pull 1000 articles that are > 45 days old and score them again.
 
@@ -46,6 +46,10 @@ def decay_relevance_score(
 
 async def main() -> None:
     await dr.global_pool.open(wait=True)
+
+    data = await dr.get_old_unread_articles(age_in_days=LOOKBACK_DAYS, sampling=100)
+
+    breakpoint()
 
     # Different behaviour than for relevance scoring (we use the module's main
     # function directly instead of infer). This function will also write the time
