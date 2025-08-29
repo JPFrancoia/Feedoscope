@@ -198,7 +198,7 @@ async def get_previous_days_unread_articles(
     return [Article(**article) for article in data]
 
 
-def get_old_unread_articles(age_in_days: int = 30, sampling: int = 1500) -> list[Article]:
+async def get_old_unread_articles(age_in_days: int = 30, max_age_in_days: int = 365, sampling: int = 1500) -> list[Article]:
 
     query = _get_query_from_file("get_old_unread_articles.sql")
 
@@ -207,6 +207,7 @@ def get_old_unread_articles(age_in_days: int = 30, sampling: int = 1500) -> list
             query,
             {
                 "age_in_days": age_in_days,
+                "max_age_in_days": max_age_in_days,
                 "sampling": sampling,
             },
         )

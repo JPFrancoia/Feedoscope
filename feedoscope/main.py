@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime
 import logging
 import math
+import time
 from typing import Literal
 
 from custom_logging import init_logging
@@ -18,16 +19,21 @@ logger = logging.getLogger(__name__)
 # Calculation: k=0.693/1=0.693
 
 DECAY_RATES = {
-    1: 0.0019,   # Half-life of 365 days
+    1: 0.0019,  # Half-life of 365 days
     2: 0.004,  # Half-life of 183 days
-    3: 0.015,  # Half-life of 45 days
+    3: 0.0231,  # Half-life of 30 days
     4: 0.069,  # Half-life of 10 days
     5: 0.139,  # Half-life of 5 days
 }
 
-LOOKBACK_DAYS = 45
+# All articles that are more recent than this will be rescored at every inference run.
+LOOKBACK_DAYS = 30
 
-# TODO: pull 1000 articles that are > 45 days old and score them again.
+# We sample SAMPLING articles between LOOKBACK_DAYS and MAX_LOOKBACK_DAYS_SAMPLING
+# and we rescore them. This is to make sure these old-ish articles get rescored from
+# time to time, but we save some computing time.
+MAX_LOOKBACK_DAYS_SAMPLING = 365
+SAMPLING = 1500
 
 
 def decay_relevance_score(
@@ -47,10 +53,6 @@ def decay_relevance_score(
 async def main() -> None:
     await dr.global_pool.open(wait=True)
 
-    data = await dr.get_old_unread_articles(age_in_days=LOOKBACK_DAYS, sampling=100)
-
-    breakpoint()
-
     # Different behaviour than for relevance scoring (we use the module's main
     # function directly instead of infer). This function will also write the time
     # sensitivity into the database. This is because the time sensitivity a) takes
@@ -58,13 +60,31 @@ async def main() -> None:
     logger.info("Starting inference for time sensitivity...")
     await infer_time_sensitivity.main(LOOKBACK_DAYS)
 
-    # Get articles that are unread from the last N days.
+    # Get articles that are unread from the last N days + old-ish unread articles
     articles = await dr.get_previous_days_unread_articles(number_of_days=LOOKBACK_DAYS)
+    logger.info(
+        f"Fetched {len(articles)} unread articles from the last {LOOKBACK_DAYS} days."
+    )
+
+    old_articles = await dr.get_old_unread_articles(
+        age_in_days=LOOKBACK_DAYS,
+        max_age_in_days=MAX_LOOKBACK_DAYS_SAMPLING,
+        sampling=SAMPLING,
+    )
+    logger.info(
+        f"Fetched {len(old_articles)} old unread articles between {LOOKBACK_DAYS} and {MAX_LOOKBACK_DAYS_SAMPLING} days."
+    )
+
+    articles.extend(old_articles)
+
+    logger.info(f"Total articles to be scored: {len(articles)}")
 
     # Remove past scores and time sensitivity from titles.
     # This should be done in llm_infer.infer as well, but better safe than sorry
     for art in articles:
         art.title = clean_title(art.title)
+
+    start_time = time.time()
 
     logger.info("Starting inference for relevance scores...")
     relevance_scores = await llm_infer.infer(articles)
@@ -82,8 +102,7 @@ async def main() -> None:
                 f"Article {articles[idx].article_id} has no time sensitivity score. Skipping decay."
             )
             relevance_scores.article_titles[idx] = (
-                f"[{decayed_score}] "
-                f"{articles[idx].title} "
+                f"[{decayed_score}] " f"{articles[idx].title} "
             )
         else:
             decayed_score = decay_relevance_score(
@@ -99,13 +118,21 @@ async def main() -> None:
 
         relevance_scores.scores[idx] = decayed_score
 
+    inference_time = time.time() - start_time
+    logger.info(
+        f"Inference completed in {inference_time:.2f} seconds for {len(articles)} articles."
+    )
+
     await dr.update_scores(
         article_ids=relevance_scores.article_ids,
         article_titles=relevance_scores.article_titles,
         scores=relevance_scores.scores,
     )
+
+    db_write_time = time.time() - inference_time - start_time
+
     logger.debug(
-        f"Scores updated in the database for {len(relevance_scores.article_ids)} articles."
+        f"Scores updated in the database for {len(relevance_scores.article_ids)} articles in {db_write_time:.2f} seconds."
     )
 
 

@@ -25,6 +25,7 @@ where
     and (ue.marked = false
         and ue.unread = true)
     and e.date_entered <= now() - interval '1 day' * %(age_in_days)s
+    and e.date_entered >= now() - interval '1 day' * %(max_age_in_days)s
 group by
     e.id,
     e.title,
