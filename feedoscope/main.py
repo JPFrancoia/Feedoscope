@@ -18,14 +18,16 @@ logger = logging.getLogger(__name__)
 # Calculation: k=0.693/1=0.693
 
 DECAY_RATES = {
-    1: 0,  # No decay
-    2: 0.0154,  # Half-life of 45 days
-    3: 0.0347,  # Half-life of 20 days
-    4: 0.0693,  # Half-life of 10 days
-    5: 0.1386,  # Half-life of 5 days
+    1: 0.0019,   # Half-life of 365 days
+    2: 0.004,  # Half-life of 183 days
+    3: 0.015,  # Half-life of 45 days
+    4: 0.069,  # Half-life of 10 days
+    5: 0.139,  # Half-life of 5 days
 }
 
-LOOKBACK_DAYS = 135
+LOOKBACK_DAYS = 365
+
+# TODO: pull 1000 articles that are > 45 days old and score them again.
 
 
 def decay_relevance_score(
