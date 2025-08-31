@@ -11,7 +11,7 @@ with numbered_articles as (
         ue.last_read,
         ts.score as time_sensitivity_score,
         array_agg(distinct l.caption) filter (where l.caption is not null), array[]::text[] as labels,
-        array_agg(distinct t.tag_name) filter (where t.tag_name is not null), array[]::text[] as tags
+        array_agg(distinct t.tag_name) filter (where t.tag_name is not null), array[]::text[] as tags,
         row_number() over (order by e.id asc) as rn
     from
         ttrss_entries e

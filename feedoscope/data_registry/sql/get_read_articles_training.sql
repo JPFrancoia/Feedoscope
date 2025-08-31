@@ -34,7 +34,8 @@ with numbered_articles as (
         e.link,
         e.author,
         e.date_entered,
-        ue.last_read
+        ue.last_read,
+        ts.score
 )
 select
     article_id,

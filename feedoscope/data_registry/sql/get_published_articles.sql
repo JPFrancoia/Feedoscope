@@ -32,7 +32,8 @@ with numbered_articles as (
         e.link,
         e.author,
         e.date_entered,
-        ue.last_read
+        ue.last_read,
+        ts.score
 )
 select
     article_id,
@@ -44,6 +45,7 @@ select
     author,
     date_entered,
     last_read,
+    time_sensitivity_score,
     labels,
     tags
 from
