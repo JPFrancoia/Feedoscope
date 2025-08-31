@@ -24,4 +24,4 @@ here is how it works:
 - You can then sort your unread articles by score, and read the most relevant ones first
 
 
-The full blog articles is here: []()
+The full blog articles is here: [Feedoscope: ranking RSS articles with LLMs by relevance and time sensitivity](https://jpfrancoia.github.io/2025/08/17/feedoscope.html)
