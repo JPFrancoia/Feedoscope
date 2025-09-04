@@ -27,7 +27,7 @@ case "$1" in
     make full_infer
     ;;
   train)
-    make llm_train
+    make train
     ;;
   *)
     echo "Usage: $0 {infer|train}"
