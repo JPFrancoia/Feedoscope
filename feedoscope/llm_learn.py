@@ -187,7 +187,7 @@ async def main() -> None:
     # The directory path MUST start with the model name (after saved_models/). This
     # is important, we rely on this in llm_infer.py to find the right model to use.
     # It MUST be followed by the date of the training run, in YYYY-MM-DD format.
-    model_path = f"saved_models/{MODEL_NAME.replace('/', '-')}_{datetime.date.today().strftime('%Y-%m-%d')}_{MAX_LENGTH}_{EPOCHS}_epochs_{BATCH_SIZE}_batch_size_{len(good_articles)}_good_{len(bad_articles)}_not_good"
+    model_path = f"saved_models/{MODEL_NAME.replace('/', '-')}_{MAX_LENGTH}_{EPOCHS}_epochs_{BATCH_SIZE}_batch_size_{datetime.date.today().strftime('%Y_%m_%d')}_{len(good_articles)}_good_{len(bad_articles)}_not_good"
 
     if os.path.exists(model_path):
         logger.info(f"Loading model from {model_path}")
