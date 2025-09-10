@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import shutil
 import time
 
 import numpy as np
@@ -24,9 +25,27 @@ MAX_LENGTH = 512  # Maximum length for the tokenizer
 INFERENCE_BATCH_SIZE = 128
 
 
-def find_latest_model(model_name: str) -> str:
+def find_latest_model(model_name: str, clean_old_models: bool = True) -> str:
+    """Find the latest saved model to use for inference.
+
+    This function will find the latest model in the `saved_models` directory, assuming
+    the models are sortable by name. The latest model in the sort is considered the
+    latest. This should be true if the model names include the training date.
+
+    Args:
+        model_name: family of model to use, e.g. "answerdotai-ModernBERT-base"
+        clean_old_models: if True, delete all older models starting with model_name
+            except the latest one
+
+    Returns:
+        The path to the latest model directory.
+
+    Raises:
+        FileNotFoundError: if no trained models are found for the given model_name.
+
+    """
     # iterate through the saved models directory. Look for the model starting with
-    # the model_name. sort by name and return the latest one.
+    # the model_name. sort by name and return the last one.
     saved_models_dir = "saved_models"
     if not os.path.exists(saved_models_dir):
         raise FileNotFoundError(f"Directory {saved_models_dir} does not exist.")
@@ -37,6 +56,17 @@ def find_latest_model(model_name: str) -> str:
         )
     model_dirs.sort()  # Sort by name, assuming the latest model has the highest name
     latest_model = model_dirs[-1]
+
+    if clean_old_models:
+        # Delete all older models (keep only the latest)
+        for older_model in model_dirs[:-1]:
+            older_model_path = os.path.join(saved_models_dir, older_model)
+            try:
+                shutil.rmtree(older_model_path)
+                logger.warning(f"Deleted older model: {older_model_path}")
+            except Exception as e:
+                logger.error(f"Failed to delete older model {older_model_path}: {e}")
+
     return os.path.join(saved_models_dir, latest_model)
 
 

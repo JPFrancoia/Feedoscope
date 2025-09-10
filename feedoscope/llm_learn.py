@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import logging
 import os
 import time
@@ -177,12 +178,16 @@ async def main() -> None:
     good_articles = await dr.get_read_articles_training(validation_size=VALIDATION_SIZE)
 
     # Ensure equal number of good and bad articles. Use the most recent good articles.
-    good_articles = good_articles[-len(bad_articles):]
+    good_articles = good_articles[-len(bad_articles) :]
 
     logger.debug(f"Collected {len(good_articles)} good articles.")
     logger.debug(f"Collected {len(bad_articles)} bad articles.")
 
-    model_path = f"saved_models/{MODEL_NAME.replace('/', '-')}_{MAX_LENGTH}_{EPOCHS}_epochs_{BATCH_SIZE}_batch_size_{len(good_articles)}_good_{len(bad_articles)}_not_good"
+    # Add the date to the model path to make sure trained models can be sorted.
+    # The directory path MUST start with the model name (after saved_models/). This
+    # is important, we rely on this in llm_infer.py to find the right model to use.
+    # It MUST be followed by the date of the training run, in YYYY-MM-DD format.
+    model_path = f"saved_models/{MODEL_NAME.replace('/', '-')}_{datetime.date.today().strftime('%Y-%m-%d')}_{MAX_LENGTH}_{EPOCHS}_epochs_{BATCH_SIZE}_batch_size_{len(good_articles)}_good_{len(bad_articles)}_not_good"
 
     if os.path.exists(model_path):
         logger.info(f"Loading model from {model_path}")
