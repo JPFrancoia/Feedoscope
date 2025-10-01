@@ -21,13 +21,13 @@ logger = logging.getLogger(__name__)
 DECAY_RATES = {
     1: 0.0019,  # Half-life of 365 days
     2: 0.004,  # Half-life of 183 days
-    3: 0.0231,  # Half-life of 30 days
-    4: 0.069,  # Half-life of 10 days
-    5: 0.139,  # Half-life of 5 days
+    3: 0.0173,  # Half-life of 40 days
+    4: 0.0347,  # Half-life of 20 days
+    5: 0.069,  # Half-life of 10 days
 }
 
 # All articles that are more recent than this will be rescored at every inference run.
-LOOKBACK_DAYS = 30
+LOOKBACK_DAYS = 40
 
 # We sample SAMPLING articles between LOOKBACK_DAYS and MAX_LOOKBACK_DAYS_SAMPLING
 # and we rescore them. This is to make sure these old-ish articles get rescored from
