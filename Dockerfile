@@ -19,14 +19,14 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 
-# Install dependencies (only production dependencies, exclude all optional groups)
-RUN uv sync --locked --no-install-project --no-editable --only-group default
+# Install dependencies (exclude only dev group)
+RUN uv sync --locked --no-install-project --no-editable --no-group dev
 
 # Copy the project into the intermediate image
 ADD . /app
 
-# Sync the project (only production dependencies, exclude all optional groups)
-RUN uv sync --locked --no-editable --only-group default
+# Sync the project (exclude only dev group)
+RUN uv sync --locked --no-editable --no-group dev
 
 FROM python:3.12-slim AS runtime
 
