@@ -1,5 +1,12 @@
 FROM python:3.12-slim AS builder
 
+# Install build dependencies required for Python packages
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libpq-dev \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=ghcr.io/astral-sh/uv:0.7.20 /uv /bin/
 
 # Enable bytecode compilation
@@ -20,7 +27,7 @@ RUN uv sync --locked --no-editable --no-group dev
 
 FROM python:3.12-slim AS runtime
 
-RUN apt-get update && apt-get install -y libpq-dev postgresql-client build-essential
+RUN apt-get update && apt-get install -y libpq-dev postgresql-client
 
 # Add NVIDIA's CUDA repo
 RUN apt-get update && apt-get install -y wget gnupg ca-certificates && \
