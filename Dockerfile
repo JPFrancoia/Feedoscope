@@ -12,31 +12,37 @@ COPY --from=ghcr.io/astral-sh/uv:0.7.20 /uv /bin/
 # Enable bytecode compilation
 ENV UV_COMPILE_BYTECODE=1
 
+# Disable UV cache to avoid storing package downloads
+ENV UV_NO_CACHE=1
+
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 
-# Install dependencies
-RUN uv sync --locked --no-install-project --no-editable --no-group dev
+# Install dependencies (only production dependencies, exclude all optional groups)
+RUN uv sync --locked --no-install-project --no-editable --only-group default
 
 # Copy the project into the intermediate image
 ADD . /app
 
-# Sync the project
-RUN uv sync --locked --no-editable --no-group dev
+# Sync the project (only production dependencies, exclude all optional groups)
+RUN uv sync --locked --no-editable --only-group default
 
 FROM python:3.12-slim AS runtime
 
-RUN apt-get update && apt-get install -y libpq-dev postgresql-client
-
-# Add NVIDIA's CUDA repo
-RUN apt-get update && apt-get install -y wget gnupg ca-certificates && \
-    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb && \
-    dpkg -i cuda-keyring_1.1-1_all.deb && \
-    rm cuda-keyring_1.1-1_all.deb && \
-    apt-get update && \
-    apt-get install -y cuda-runtime-12-8
-    # rm -rf /var/lib/apt/lists/*
+# Install runtime dependencies and CUDA in a single layer
+RUN apt-get update && apt-get install -y \
+    libpq-dev \
+    postgresql-client \
+    wget \
+    gnupg \
+    ca-certificates \
+    && wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
+    && dpkg -i cuda-keyring_1.1-1_all.deb \
+    && rm cuda-keyring_1.1-1_all.deb \
+    && apt-get update \
+    && apt-get install -y cuda-runtime-12-8 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Place executables in the environment at the front of the path
 ENV VIRTUAL_ENV=/app/.venv \
