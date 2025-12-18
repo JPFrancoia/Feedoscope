@@ -32,12 +32,12 @@ FROM python:3.12-slim AS runtime
 
 # Install runtime dependencies and CUDA in a single layer
 RUN apt-get update && apt-get install -y \
+    build-essential \
     libpq-dev \
     postgresql-client \
     wget \
     gnupg \
     ca-certificates \
-    make \
     && wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
     && dpkg -i cuda-keyring_1.1-1_all.deb \
     && rm cuda-keyring_1.1-1_all.deb \
