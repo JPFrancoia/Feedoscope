@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import logging
 import os
+import shutil
 import time
 from typing import Any
 
@@ -200,7 +201,7 @@ async def main() -> None:
             # directory but the training run didn't complete and left an empty directory.
             logger.error(f"Error loading model: {e}")
             logger.info("Model not found or corrupted, deleting the model path.")
-            os.remove(model_path)
+            shutil.rmtree(model_path)
             raise RuntimeError(
                 f"Model not found or corrupted at {model_path}. The model's directory has been deleted."
             )
