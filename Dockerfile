@@ -57,6 +57,6 @@ WORKDIR /app
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 
 # Copy the relevant folders so that the application can run
-COPY logging.conf ./
+COPY logging.conf Makefile ./
 COPY custom_logging ./custom_logging
 COPY feedoscope ./feedoscope
