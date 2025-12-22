@@ -77,7 +77,6 @@ def best_effort_json_parse(result: str) -> dict[str, Any]:
     return json.loads(result)
 
 
-
 async def infer(recent_unread_articles: list[Article]) -> list[TimeSensitivity]:
     llm = Llama(model_path=MODEL_PATH, n_gpu_layers=-1, verbose=False, n_ctx=1024)
 
@@ -111,7 +110,9 @@ async def infer(recent_unread_articles: list[Article]) -> list[TimeSensitivity]:
 
         time_sensitivities.append(sensitivity)
 
-        logger.debug(f"{idx}/{len(recent_unread_articles)} Article: {article.title}, data: {sensitivity}")
+        logger.debug(
+            f"{idx}/{len(recent_unread_articles)} Article: {article.title}, data: {sensitivity}"
+        )
 
     return time_sensitivities
 

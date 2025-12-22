@@ -14,7 +14,7 @@ from transformers import (
 from custom_logging import init_logging
 from feedoscope import config, utils
 from feedoscope.data_registry import data_registry as dr
-from feedoscope.entities import RelevanceInferenceResults, Article
+from feedoscope.entities import Article, RelevanceInferenceResults
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +155,9 @@ async def main() -> None:
         article_titles=results.article_titles,
         scores=results.scores,
     )
-    logger.debug(f"Scores updated in the database for {len(results.article_ids)} articles.")
+    logger.debug(
+        f"Scores updated in the database for {len(results.article_ids)} articles."
+    )
 
     await dr.global_pool.close()
 

@@ -47,3 +47,7 @@ up_all:
 
 down_all:
 	migrate -database ${DATABASE_URL} -path db/migrations down
+
+format:
+	uv run black .
+	uv run isort .

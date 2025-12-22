@@ -1,7 +1,7 @@
 from enum import StrEnum, unique
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, NaiveDatetime
+from pydantic import AwareDatetime, BaseModel, Field
 
 
 @unique
@@ -12,18 +12,29 @@ class ConfidenceLevel(StrEnum):
 
 
 class Article(BaseModel):
-    article_id: int
+    """
+    Article entity for Miniflux database.
+
+    Main differences from TTRSS:
+    - article_id is now the 'id' column from entries table (Miniflux)
+    - feed_name comes from feeds.title
+    - starred replaces marked (same meaning)
+    - vote column indicates user preference (-1=bad, 0=neutral, 1=good)
+    - tags are stored directly in entries table
+    """
+
+    article_id: int  # entries.id in Miniflux
     title: str
-    marked: bool
-    feed_name: str
+    starred: bool  # Replaces 'marked' from TTRSS
+    feed_name: str  # From feeds.title
     content: str
-    link: str
+    link: str  # URL in Miniflux
     author: str
-    date_entered: NaiveDatetime
-    last_read: Optional[NaiveDatetime] = Field(...)
+    date_entered: AwareDatetime  # created_at in Miniflux
+    last_read: Optional[AwareDatetime] = Field(...)  # changed_at when status='read'
     time_sensitivity_score: Optional[Literal[1, 2, 3, 4, 5]] = Field(...)
-    labels: list[str]
-    tags: list[str]
+    tags: list[str]  # Directly from entries.tags array in Miniflux
+    vote: int  # -1, 0, or 1 in Miniflux
 
 
 class RelevanceInferenceResults(BaseModel):

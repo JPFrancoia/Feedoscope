@@ -168,9 +168,7 @@ async def get_sample_not_good(validation_size: int) -> list[Article]:
     return [Article(**article) for article in data]
 
 
-async def get_previous_days_unread_articles(
-    number_of_days: int = 14
-) -> list[Article]:
+async def get_previous_days_unread_articles(number_of_days: int = 14) -> list[Article]:
     """Get unread articles from the previous X days.
 
     This is used to fetch articles that are not read yet, but are still
@@ -198,7 +196,9 @@ async def get_previous_days_unread_articles(
     return [Article(**article) for article in data]
 
 
-async def get_old_unread_articles(age_in_days: int = 30, max_age_in_days: int = 365, sampling: int = 1500) -> list[Article]:
+async def get_old_unread_articles(
+    age_in_days: int = 30, max_age_in_days: int = 365, sampling: int = 1500
+) -> list[Article]:
 
     query = _get_query_from_file("get_old_unread_articles.sql")
 
