@@ -47,7 +47,7 @@ Summary: {{article_summary_or_first_paragraph}}
 """
 
 
-MODEL_PATH = "./mistral/Ministral-8B-Instruct-2410-Q6_K_L.gguf"
+MODEL_PATH = "models/Ministral-8B-Instruct-2410-Q6_K_L.gguf"
 MAX_CONTENT_LENGTH = 1024
 
 

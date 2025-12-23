@@ -4,8 +4,8 @@
 *.mypy_cache
 *activity.log*
 *saved_models*
+models/
 test_token.py
 
 *.pkl
 *.npy
-*.gguf
