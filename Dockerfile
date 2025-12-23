@@ -1,7 +1,11 @@
 FROM python:3.12-slim AS builder
 
 # Install build dependencies required for Python packages
-RUN apt-get update && apt-get install -y build-essential libpq-dev git && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libpq-dev \
+    git \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:0.7.20 /uv /bin/
 
@@ -26,11 +30,19 @@ RUN uv sync --locked --no-editable --no-group dev
 
 FROM python:3.12-slim AS runtime
 
-# Install runtime dependencies (PyTorch wheels include CUDA libraries)
-RUN apt-get update && apt-get install -y libpq-dev postgresql-client && rm -rf /var/lib/apt/lists/*
+# Install runtime dependencies (no system CUDA - PyTorch wheels include CUDA libraries)
+# build-essential is needed for Triton to compile GPU kernels at runtime
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libpq-dev \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
 
 # Place executables in the environment at the front of the path
-ENV VIRTUAL_ENV=/app/.venv PATH="/app/.venv/bin:$PATH" NVIDIA_VISIBLE_DEVICES=all NVIDIA_DRIVER_CAPABILITIES=compute,utility
+ENV VIRTUAL_ENV=/app/.venv \
+    PATH="/app/.venv/bin:$PATH" \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 WORKDIR /app
 
