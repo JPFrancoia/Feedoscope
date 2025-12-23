@@ -30,12 +30,20 @@ RUN uv sync --locked --no-editable --no-group dev
 
 FROM python:3.12-slim AS runtime
 
-# Install runtime dependencies (no system CUDA - PyTorch wheels include CUDA libraries)
-# build-essential is needed for Triton to compile GPU kernels at runtime
+# Install runtime dependencies and CUDA in a single layer
+# The CUDA libraries are necessary to compile llama-cpp-python with GPU support.
 RUN apt-get update && apt-get install -y \
     build-essential \
     libpq-dev \
     postgresql-client \
+    wget \
+    gnupg \
+    ca-certificates \
+    && wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
+    && dpkg -i cuda-keyring_1.1-1_all.deb \
+    && rm cuda-keyring_1.1-1_all.deb \
+    && apt-get update \
+    && apt-get install -y cuda-runtime-12-8 \
     && rm -rf /var/lib/apt/lists/*
 
 # Place executables in the environment at the front of the path
