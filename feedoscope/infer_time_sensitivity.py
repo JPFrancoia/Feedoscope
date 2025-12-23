@@ -78,7 +78,9 @@ def best_effort_json_parse(result: str) -> dict[str, Any]:
 
 
 async def infer(recent_unread_articles: list[Article]) -> list[TimeSensitivity]:
+    logger.debug("Loading Llama model for time sensitivity inference...")
     llm = Llama(model_path=MODEL_PATH, n_gpu_layers=-1, verbose=False, n_ctx=1024)
+    logger.debug("Llama model loaded.")
 
     time_sensitivities: list[TimeSensitivity] = []
 
@@ -123,6 +125,10 @@ async def main(number_of_days: int = 14) -> None:
 
     recent_unread_articles = await dr.get_previous_days_articles_wo_time_sensitivity(
         number_of_days=number_of_days
+    )
+
+    logger.info(
+        f"Fetched {len(recent_unread_articles)} unread articles from the last {number_of_days} days without time sensitivity."
     )
 
     time_sensitivities = await infer(recent_unread_articles)
