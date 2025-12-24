@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from typing import Any
+from typing import Any, AsyncGenerator
 
 from bs4 import BeautifulSoup
 from cleantext import clean  # type: ignore[import]
@@ -77,12 +77,10 @@ def best_effort_json_parse(result: str) -> dict[str, Any]:
     return json.loads(result)
 
 
-async def infer(recent_unread_articles: list[Article]) -> list[TimeSensitivity]:
+async def infer(recent_unread_articles: list[Article]) -> AsyncGenerator[TimeSensitivity, None]:
     logger.debug("Loading Llama model for time sensitivity inference...")
     llm = Llama(model_path=MODEL_PATH, n_gpu_layers=-1, verbose=False, n_ctx=1024)
     logger.debug("Llama model loaded.")
-
-    time_sensitivities: list[TimeSensitivity] = []
 
     for idx, article in enumerate(recent_unread_articles, start=1):
         final_prompt = PROMPT.replace("{{headline}}", utils.clean_title(article.title))
@@ -110,13 +108,11 @@ async def infer(recent_unread_articles: list[Article]) -> list[TimeSensitivity]:
             logger.exception(f"Validation error for article {article.title}")
             continue
 
-        time_sensitivities.append(sensitivity)
-
         logger.debug(
             f"{idx}/{len(recent_unread_articles)} Article: {article.title}, data: {sensitivity}"
         )
 
-    return time_sensitivities
+        yield sensitivity
 
 
 async def main(number_of_days: int = 14) -> None:
@@ -131,15 +127,25 @@ async def main(number_of_days: int = 14) -> None:
         f"Fetched {len(recent_unread_articles)} unread articles from the last {number_of_days} days without time sensitivity."
     )
 
-    time_sensitivities = await infer(recent_unread_articles)
+    batch: list[TimeSensitivity] = []
+    total_processed = 0
 
-    # TODO: assign labels to the article, into the database
+    async for sensitivity in infer(recent_unread_articles):
+        batch.append(sensitivity)
 
-    if time_sensitivities:
-        await dr.register_time_sensitivity_for_articles(time_sensitivities)
-        logger.info(
-            f"Registered time sensitivities for {len(time_sensitivities)} articles."
-        )
+        if len(batch) >= 10:
+            await dr.register_time_sensitivity_for_articles(batch)
+            total_processed += len(batch)
+            logger.info(f"Registered batch of {len(batch)} time sensitivities. Total: {total_processed}")
+            batch = []
+
+    # Write remaining items that didn't reach batch size
+    if batch:
+        await dr.register_time_sensitivity_for_articles(batch)
+        total_processed += len(batch)
+        logger.info(f"Registered final batch of {len(batch)} time sensitivities. Total: {total_processed}")
+
+    logger.info(f"Completed processing. Total registered: {total_processed} articles.")
 
 
 if __name__ == "__main__":
