@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import math
 import time
@@ -42,7 +42,9 @@ def decay_relevance_score(
     time_sensitivity: Literal[1, 2, 3, 4, 5],
 ) -> int:
 
-    days_passed = (datetime.now() - date_entered).total_seconds() / 3600 / 24
+    days_passed = (
+        (datetime.now(timezone.utc) - date_entered).total_seconds() / 3600 / 24
+    )
     decayed_score = original_score * math.exp(
         -DECAY_RATES[time_sensitivity] * days_passed
     )
