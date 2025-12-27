@@ -77,7 +77,9 @@ def best_effort_json_parse(result: str) -> dict[str, Any]:
     return json.loads(result)
 
 
-async def infer(recent_unread_articles: list[Article]) -> AsyncGenerator[TimeSensitivity, None]:
+async def infer(
+    recent_unread_articles: list[Article],
+) -> AsyncGenerator[TimeSensitivity, None]:
     logger.debug("Loading Llama model for time sensitivity inference...")
     llm = Llama(model_path=MODEL_PATH, n_gpu_layers=-1, verbose=False, n_ctx=1024)
     logger.debug("Llama model loaded.")
@@ -136,14 +138,18 @@ async def main(number_of_days: int = 14) -> None:
         if len(batch) >= 10:
             await dr.register_time_sensitivity_for_articles(batch)
             total_processed += len(batch)
-            logger.info(f"Registered batch of {len(batch)} time sensitivities. Total: {total_processed}")
+            logger.info(
+                f"Registered batch of {len(batch)} time sensitivities. Total: {total_processed}"
+            )
             batch = []
 
     # Write remaining items that didn't reach batch size
     if batch:
         await dr.register_time_sensitivity_for_articles(batch)
         total_processed += len(batch)
-        logger.info(f"Registered final batch of {len(batch)} time sensitivities. Total: {total_processed}")
+        logger.info(
+            f"Registered final batch of {len(batch)} time sensitivities. Total: {total_processed}"
+        )
 
     logger.info(f"Completed processing. Total registered: {total_processed} articles.")
 

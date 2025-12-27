@@ -178,8 +178,10 @@ async def main() -> None:
     bad_articles = await dr.get_published_articles(validation_size=VALIDATION_SIZE)
     good_articles = await dr.get_read_articles_training(validation_size=VALIDATION_SIZE)
 
-    # Ensure equal number of good and bad articles. Use the most recent good articles.
-    good_articles = good_articles[-len(bad_articles) :]
+    # Ensure equal number of good and bad articles. Use the most recent articles from both.
+    min_count = min(len(good_articles), len(bad_articles))
+    good_articles = good_articles[-min_count:]
+    bad_articles = bad_articles[-min_count:]
 
     logger.debug(f"Collected {len(good_articles)} good articles.")
     logger.debug(f"Collected {len(bad_articles)} bad articles.")

@@ -103,19 +103,11 @@ async def main() -> None:
             logger.warning(
                 f"Article {articles[idx].article_id} has no time sensitivity score. Skipping decay."
             )
-            relevance_scores.article_titles[idx] = (
-                f"[{decayed_score}] " f"{articles[idx].title} "
-            )
         else:
             decayed_score = decay_relevance_score(
                 original_score=relevance_scores.scores[idx],
                 date_entered=articles[idx].date_entered,
                 time_sensitivity=articles[idx].time_sensitivity_score,  # type: ignore
-            )
-            relevance_scores.article_titles[idx] = (
-                f"[{decayed_score}] "
-                f"{articles[idx].title} "
-                f"(TS: {articles[idx].time_sensitivity_score})"
             )
 
         relevance_scores.scores[idx] = decayed_score

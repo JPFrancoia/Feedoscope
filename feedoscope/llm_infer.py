@@ -122,10 +122,8 @@ async def infer(recent_unread_articles: list[Article]) -> RelevanceInferenceResu
     probs = np.round(np.array(all_probs) * 100).astype(int).tolist()
 
     article_ids = [article.article_id for article in recent_unread_articles]
-    article_titles = [
-        f"[{score}] {article.title}"
-        for score, article in zip(probs, recent_unread_articles)
-    ]
+    # Keep original titles unchanged
+    article_titles = [article.title for article in recent_unread_articles]
 
     return RelevanceInferenceResults(
         article_ids=article_ids,

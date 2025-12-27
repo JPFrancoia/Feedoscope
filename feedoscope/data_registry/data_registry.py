@@ -222,13 +222,12 @@ async def update_scores(
     """Update the scores of articles in the database.
 
     Args:
-        article_titles: List of article titles to update.
+        article_titles: List of article titles (unused, kept for backward compatibility).
         article_ids: List of article IDs to update.
         scores: List of scores to set for the articles.
 
     """
     scores_query = _get_query_from_file("update_scores.sql")
-    titles_query = _get_query_from_file("update_titles.sql")
 
     async with global_pool.connection() as conn, conn.cursor() as cur:
         await cur.executemany(
@@ -236,13 +235,6 @@ async def update_scores(
             [
                 {"score": score, "int_id": int_id}
                 for score, int_id in zip(scores, article_ids)
-            ],
-        )
-        await cur.executemany(
-            titles_query,
-            [
-                {"title": title, "int_id": int_id}
-                for title, int_id in zip(article_titles, article_ids)
             ],
         )
 
