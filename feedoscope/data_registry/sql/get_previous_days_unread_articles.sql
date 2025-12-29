@@ -9,7 +9,7 @@ select
     e.content,
     e.url as link,
     e.author,
-    e.created_at as date_entered,
+    e.published_at as date_entered,
     e.changed_at as last_read,
     ts.score as time_sensitivity_score,
     COALESCE(e.tags, array[]::text[]) as tags,
@@ -23,6 +23,6 @@ where
     and e.vote != -1  -- Exclude bad articles
     and e.starred = false
     and e.score = 0  -- Only articles without scores
-    and e.created_at >= now() - interval '1 day' * %(number_of_days)s
+    and e.published_at >= now() - interval '1 day' * %(number_of_days)s
 order by
     e.id asc;

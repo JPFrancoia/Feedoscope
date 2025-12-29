@@ -9,7 +9,7 @@ select
     e.content,
     e.url as link,
     e.author,
-    e.created_at as date_entered,
+    e.published_at as date_entered,
     e.changed_at as last_read,
     null as time_sensitivity_score,
     COALESCE(e.tags, array[]::text[]) as tags,
@@ -18,7 +18,7 @@ from
     entries e
     join feeds f on e.feed_id = f.id
 where
-    e.created_at >= now() - interval '1 day' * %(number_of_days)s
+    e.published_at >= now() - interval '1 day' * %(number_of_days)s
     and not exists (
         select 1 from time_sensitivity ts
         where ts.article_id = e.id
