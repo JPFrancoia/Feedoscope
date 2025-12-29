@@ -22,7 +22,6 @@ where
     e.status = 'unread'
     and e.vote != -1  -- Exclude bad articles
     and e.starred = false
-    and e.score = 0  -- Only articles without scores
     and e.published_at >= now() - interval '1 day' * %(number_of_days)s
 order by
     e.id asc;
