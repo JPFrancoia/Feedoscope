@@ -10,7 +10,7 @@ with numbered_articles as (
         e.content,
         e.url as link,
         e.author,
-        e.created_at as date_entered,
+        e.published_at as date_entered,
         e.changed_at as last_read,
         ts.score as time_sensitivity_score,
         COALESCE(e.tags, array[]::text[]) as tags,
@@ -23,7 +23,7 @@ with numbered_articles as (
     where
         e.status = 'read'
         and e.vote >= 0  -- vote=0 or vote=1 are considered good
-        and e.created_at > now() - interval '1 year'
+        and e.published_at > now() - interval '1 year'
     order by
         e.id asc
 )

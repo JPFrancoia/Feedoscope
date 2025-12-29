@@ -30,7 +30,7 @@ class Article(BaseModel):
     content: str
     link: str  # URL in Miniflux
     author: str
-    date_entered: AwareDatetime  # created_at in Miniflux
+    date_entered: AwareDatetime  # published_at in Miniflux
     last_read: Optional[AwareDatetime] = Field(...)  # changed_at when status='read'
     time_sensitivity_score: Optional[Literal[1, 2, 3, 4, 5]] = Field(...)
     tags: list[str]  # Directly from entries.tags array in Miniflux
