@@ -57,15 +57,21 @@ def strip_html_keep_text(html: str) -> str:
     return " ".join(text.split())
 
 
-def prepare_content(content: str, llm: Llama) -> str:
+def prepare_content(content: str, llm: Llama, title: str) -> str:
     content = clean(strip_html_keep_text(content))
 
-    # Once sanitized, we truncate the content to fit within the model's token limit.
-    # We cut by chars so if we cut to 1024 chars and the model's window is 1024
-    # tokens, we are sure to fit.
-    tokens = llm.tokenize(content.encode("utf-8")[:MAX_CONTENT_LENGTH])
+    # Calculate token budget: context window - prompt template - title - response buffer
+    prompt_template_tokens = len(llm.tokenize(PROMPT.encode("utf-8")))
+    title_tokens = len(llm.tokenize(title.encode("utf-8")))
+    response_tokens = 200  # Reserve tokens for the JSON response
+    available_tokens = 1024 - prompt_template_tokens - title_tokens - response_tokens
 
-    return llm.detokenize(tokens).decode("utf-8", errors="ignore")
+    # Tokenize and truncate to available budget
+    content_tokens = llm.tokenize(content.encode("utf-8"))
+    if len(content_tokens) > available_tokens:
+        content_tokens = content_tokens[:available_tokens]
+
+    return llm.detokenize(content_tokens).decode("utf-8", errors="ignore")
 
 
 def best_effort_json_parse(result: str) -> dict[str, Any]:
@@ -77,17 +83,17 @@ def best_effort_json_parse(result: str) -> dict[str, Any]:
     return json.loads(result)
 
 
-
 async def infer(recent_unread_articles: list[Article]) -> list[TimeSensitivity]:
     llm = Llama(model_path=MODEL_PATH, n_gpu_layers=-1, verbose=False, n_ctx=1024)
 
     time_sensitivities: list[TimeSensitivity] = []
 
     for idx, article in enumerate(recent_unread_articles, start=1):
-        final_prompt = PROMPT.replace("{{headline}}", utils.clean_title(article.title))
+        clean_title = utils.clean_title(article.title)
+        final_prompt = PROMPT.replace("{{headline}}", clean_title)
         final_prompt = final_prompt.replace(
             "{{article_summary_or_first_paragraph}}",
-            prepare_content(article.content, llm),
+            prepare_content(article.content, llm, clean_title),
         )
 
         output = llm(
@@ -111,7 +117,9 @@ async def infer(recent_unread_articles: list[Article]) -> list[TimeSensitivity]:
 
         time_sensitivities.append(sensitivity)
 
-        logger.debug(f"{idx}/{len(recent_unread_articles)} Article: {article.title}, data: {sensitivity}")
+        logger.debug(
+            f"{idx}/{len(recent_unread_articles)} Article: {article.title}, data: {sensitivity}"
+        )
 
     return time_sensitivities
 
