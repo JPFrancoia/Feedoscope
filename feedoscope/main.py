@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import math
 import time
@@ -42,7 +42,9 @@ def decay_relevance_score(
     time_sensitivity: Literal[1, 2, 3, 4, 5],
 ) -> int:
 
-    days_passed = (datetime.now() - date_entered).total_seconds() / 3600 / 24
+    days_passed = (
+        (datetime.now(timezone.utc) - date_entered).total_seconds() / 3600 / 24
+    )
     decayed_score = original_score * math.exp(
         -DECAY_RATES[time_sensitivity] * days_passed
     )
@@ -101,19 +103,11 @@ async def main() -> None:
             logger.warning(
                 f"Article {articles[idx].article_id} has no time sensitivity score. Skipping decay."
             )
-            relevance_scores.article_titles[idx] = (
-                f"[{decayed_score}] " f"{articles[idx].title} "
-            )
         else:
             decayed_score = decay_relevance_score(
                 original_score=relevance_scores.scores[idx],
                 date_entered=articles[idx].date_entered,
                 time_sensitivity=articles[idx].time_sensitivity_score,  # type: ignore
-            )
-            relevance_scores.article_titles[idx] = (
-                f"[{decayed_score}] "
-                f"{articles[idx].title} "
-                f"(TS: {articles[idx].time_sensitivity_score})"
             )
 
         relevance_scores.scores[idx] = decayed_score

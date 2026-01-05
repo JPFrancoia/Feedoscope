@@ -2,32 +2,31 @@ import json
 import logging
 from typing import Any, Mapping
 
-
 # Taken from:
 # https://github.com/MyColorfulDays/jsonformatter/blob/f7908f1b2bc9e556aea29f26307643e732ac8b5e/src/jsonformatter/jsonformatter.py#L89
 _LogRecordDefaultAttributes = {
-    'name',
-    'msg',
-    'args',
-    'levelname',
-    'levelno',
-    'pathname',
-    'filename',
-    'module',
-    'exc_info',
-    'exc_text',
-    'stack_info',
-    'lineno',
-    'funcName',
-    'created',
-    'msecs',
-    'relativeCreated',
-    'thread',
-    'threadName',
-    'processName',
-    'process',
-    'message',
-    'asctime',
+    "name",
+    "msg",
+    "args",
+    "levelname",
+    "levelno",
+    "pathname",
+    "filename",
+    "module",
+    "exc_info",
+    "exc_text",
+    "stack_info",
+    "lineno",
+    "funcName",
+    "created",
+    "msecs",
+    "relativeCreated",
+    "thread",
+    "threadName",
+    "processName",
+    "process",
+    "message",
+    "asctime",
     "otelSpanID",
     "otelTraceID",
     "otelTraceSampled",
@@ -64,7 +63,7 @@ class ColorFormatter(logging.Formatter):
 
         extras = get_records_extra_attrs(record)
 
-        if (extras := get_records_extra_attrs(record)):
+        if extras := get_records_extra_attrs(record):
             record.msg = f"{record.msg}. Extras: {json.dumps(extras)}"
 
         return formatter.format(record)

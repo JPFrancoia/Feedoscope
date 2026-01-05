@@ -168,9 +168,7 @@ async def get_sample_not_good(validation_size: int) -> list[Article]:
     return [Article(**article) for article in data]
 
 
-async def get_previous_days_unread_articles(
-    number_of_days: int = 14
-) -> list[Article]:
+async def get_previous_days_unread_articles(number_of_days: int = 14) -> list[Article]:
     """Get unread articles from the previous X days.
 
     This is used to fetch articles that are not read yet, but are still
@@ -198,7 +196,9 @@ async def get_previous_days_unread_articles(
     return [Article(**article) for article in data]
 
 
-async def get_old_unread_articles(age_in_days: int = 30, max_age_in_days: int = 365, sampling: int = 1500) -> list[Article]:
+async def get_old_unread_articles(
+    age_in_days: int = 30, max_age_in_days: int = 365, sampling: int = 1500
+) -> list[Article]:
 
     query = _get_query_from_file("get_old_unread_articles.sql")
 
@@ -222,13 +222,12 @@ async def update_scores(
     """Update the scores of articles in the database.
 
     Args:
-        article_titles: List of article titles to update.
+        article_titles: List of article titles (unused, kept for backward compatibility).
         article_ids: List of article IDs to update.
         scores: List of scores to set for the articles.
 
     """
     scores_query = _get_query_from_file("update_scores.sql")
-    titles_query = _get_query_from_file("update_titles.sql")
 
     async with global_pool.connection() as conn, conn.cursor() as cur:
         await cur.executemany(
@@ -236,13 +235,6 @@ async def update_scores(
             [
                 {"score": score, "int_id": int_id}
                 for score, int_id in zip(scores, article_ids)
-            ],
-        )
-        await cur.executemany(
-            titles_query,
-            [
-                {"title": title, "int_id": int_id}
-                for title, int_id in zip(article_titles, article_ids)
             ],
         )
 

@@ -1,10 +1,18 @@
 FROM python:3.12-slim AS builder
 
-# Install build dependencies required for Python packages
+# Install build dependencies including CUDA toolkit for compiling llama-cpp-python with GPU support
 RUN apt-get update && apt-get install -y \
     build-essential \
     libpq-dev \
     git \
+    wget \
+    gnupg \
+    ca-certificates \
+    && wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
+    && dpkg -i cuda-keyring_1.1-1_all.deb \
+    && rm cuda-keyring_1.1-1_all.deb \
+    && apt-get update \
+    && apt-get install -y cuda-toolkit-12-8 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:0.7.20 /uv /bin/
@@ -15,11 +23,17 @@ ENV UV_COMPILE_BYTECODE=1
 # Disable UV cache to avoid storing package downloads
 ENV UV_NO_CACHE=1
 
+# Set CUDA paths and build flags for llama-cpp-python
+ENV PATH="/usr/local/cuda-12.8/bin:${PATH}" \
+    LD_LIBRARY_PATH="/usr/local/cuda-12.8/lib64:${LD_LIBRARY_PATH}" \
+    CMAKE_ARGS="-DGGML_CUDA=on" \
+    FORCE_CMAKE=1
+
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 
-# Install dependencies (exclude only dev group)
+# Install dependencies (exclude only dev group) - llama-cpp-python will be compiled with CUDA support
 RUN uv sync --locked --no-install-project --no-editable --no-group dev
 
 # Copy the project into the intermediate image
@@ -30,9 +44,9 @@ RUN uv sync --locked --no-editable --no-group dev
 
 FROM python:3.12-slim AS runtime
 
-# Install runtime dependencies and CUDA in a single layer
+# Install runtime dependencies and CUDA runtime libraries
+# CUDA runtime is needed to execute GPU-accelerated code at runtime
 RUN apt-get update && apt-get install -y \
-    build-essential \
     libpq-dev \
     postgresql-client \
     wget \
@@ -42,12 +56,13 @@ RUN apt-get update && apt-get install -y \
     && dpkg -i cuda-keyring_1.1-1_all.deb \
     && rm cuda-keyring_1.1-1_all.deb \
     && apt-get update \
-    && apt-get install -y cuda-runtime-12-8 \
+    && apt-get install -y cuda-cudart-12-8 libcublas-12-8 \
     && rm -rf /var/lib/apt/lists/*
 
 # Place executables in the environment at the front of the path
 ENV VIRTUAL_ENV=/app/.venv \
     PATH="/app/.venv/bin:$PATH" \
+    LD_LIBRARY_PATH="/usr/local/cuda-12.8/lib64:${LD_LIBRARY_PATH}" \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility
 

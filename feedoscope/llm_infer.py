@@ -14,7 +14,7 @@ from transformers import (
 from custom_logging import init_logging
 from feedoscope import config, utils
 from feedoscope.data_registry import data_registry as dr
-from feedoscope.entities import RelevanceInferenceResults, Article
+from feedoscope.entities import Article, RelevanceInferenceResults
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ INFERENCE_BATCH_SIZE = 128
 def find_latest_model(model_name: str, clean_old_models: bool = True) -> str:
     """Find the latest saved model to use for inference.
 
-    This function will find the latest model in the `saved_models` directory, assuming
+    This function will find the latest model in the `models` directory, assuming
     the models are sortable by name. The latest model in the sort is considered the
     latest. This should be true if the model names include the training date.
 
@@ -44,15 +44,15 @@ def find_latest_model(model_name: str, clean_old_models: bool = True) -> str:
         FileNotFoundError: if no trained models are found for the given model_name.
 
     """
-    # iterate through the saved models directory. Look for the model starting with
+    # iterate through the models directory. Look for the model starting with
     # the model_name. sort by name and return the last one.
-    saved_models_dir = "saved_models"
-    if not os.path.exists(saved_models_dir):
-        raise FileNotFoundError(f"Directory {saved_models_dir} does not exist.")
-    model_dirs = [d for d in os.listdir(saved_models_dir) if d.startswith(model_name)]
+    models_dir = "models"
+    if not os.path.exists(models_dir):
+        raise FileNotFoundError(f"Directory {models_dir} does not exist.")
+    model_dirs = [d for d in os.listdir(models_dir) if d.startswith(model_name)]
     if not model_dirs:
         raise FileNotFoundError(
-            f"No models found starting with {model_name} in {saved_models_dir}."
+            f"No models found starting with {model_name} in {models_dir}."
         )
     model_dirs.sort()  # Sort by name, assuming the latest model has the highest name
     latest_model = model_dirs[-1]
@@ -60,14 +60,14 @@ def find_latest_model(model_name: str, clean_old_models: bool = True) -> str:
     if clean_old_models:
         # Delete all older models (keep only the latest)
         for older_model in model_dirs[:-1]:
-            older_model_path = os.path.join(saved_models_dir, older_model)
+            older_model_path = os.path.join(models_dir, older_model)
             try:
                 shutil.rmtree(older_model_path)
                 logger.warning(f"Deleted older model: {older_model_path}")
             except Exception as e:
                 logger.error(f"Failed to delete older model {older_model_path}: {e}")
 
-    return os.path.join(saved_models_dir, latest_model)
+    return os.path.join(models_dir, latest_model)
 
 
 async def infer(recent_unread_articles: list[Article]) -> RelevanceInferenceResults:
@@ -122,10 +122,8 @@ async def infer(recent_unread_articles: list[Article]) -> RelevanceInferenceResu
     probs = np.round(np.array(all_probs) * 100).astype(int).tolist()
 
     article_ids = [article.article_id for article in recent_unread_articles]
-    article_titles = [
-        f"[{score}] {article.title}"
-        for score, article in zip(probs, recent_unread_articles)
-    ]
+    # Keep original titles unchanged
+    article_titles = [article.title for article in recent_unread_articles]
 
     return RelevanceInferenceResults(
         article_ids=article_ids,
@@ -155,7 +153,9 @@ async def main() -> None:
         article_titles=results.article_titles,
         scores=results.scores,
     )
-    logger.debug(f"Scores updated in the database for {len(results.article_ids)} articles.")
+    logger.debug(
+        f"Scores updated in the database for {len(results.article_ids)} articles."
+    )
 
     await dr.global_pool.close()
 

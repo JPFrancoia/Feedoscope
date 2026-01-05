@@ -178,17 +178,19 @@ async def main() -> None:
     bad_articles = await dr.get_published_articles(validation_size=VALIDATION_SIZE)
     good_articles = await dr.get_read_articles_training(validation_size=VALIDATION_SIZE)
 
-    # Ensure equal number of good and bad articles. Use the most recent good articles.
-    good_articles = good_articles[-len(bad_articles) :]
+    # Ensure equal number of good and bad articles. Use the most recent articles from both.
+    min_count = min(len(good_articles), len(bad_articles))
+    good_articles = good_articles[-min_count:]
+    bad_articles = bad_articles[-min_count:]
 
     logger.debug(f"Collected {len(good_articles)} good articles.")
     logger.debug(f"Collected {len(bad_articles)} bad articles.")
 
     # Add the date to the model path to make sure trained models can be sorted.
-    # The directory path MUST start with the model name (after saved_models/). This
+    # The directory path MUST start with the model name (after models/). This
     # is important, we rely on this in llm_infer.py to find the right model to use.
     # It MUST be followed by the date of the training run, in YYYY-MM-DD format.
-    model_path = f"saved_models/{MODEL_NAME.replace('/', '-')}_{MAX_LENGTH}_{EPOCHS}_epochs_{BATCH_SIZE}_batch_size_{datetime.date.today().strftime('%Y_%m_%d')}_{len(good_articles)}_good_{len(bad_articles)}_not_good"
+    model_path = f"models/{MODEL_NAME.replace('/', '-')}_{MAX_LENGTH}_{EPOCHS}_epochs_{BATCH_SIZE}_batch_size_{datetime.date.today().strftime('%Y_%m_%d')}_{len(good_articles)}_good_{len(bad_articles)}_not_good"
 
     if os.path.exists(model_path):
         logger.info(f"Loading model from {model_path}")
@@ -196,7 +198,7 @@ async def main() -> None:
         try:
             model = AutoModelForSequenceClassification.from_pretrained(model_path)
         except ValueError as e:
-            # handle this error: ValueError: Unrecognized model in saved_models/answerdotai-[..]
+            # handle this error: ValueError: Unrecognized model in models/answerdotai-[..]
             # When this happens, it's likely because a previous run created the
             # directory but the training run didn't complete and left an empty directory.
             logger.error(f"Error loading model: {e}")

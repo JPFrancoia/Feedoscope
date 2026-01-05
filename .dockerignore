@@ -7,3 +7,4 @@
 .git
 *.ruff_cache*
 *saved_models*
+*models*

@@ -1,40 +1,27 @@
+-- Get articles from the previous X days without time sensitivity scores
+-- In Miniflux: any status, no time_sensitivity entry
 select
     e.id as article_id,
     e.title,
-    ue.marked,
-    ue.score,
+    e.starred,
+    e.score,
     f.title as feed_name,
     e.content,
-    e.link,
+    e.url as link,
     e.author,
-    e.date_entered,
-    ue.last_read,
+    e.published_at as date_entered,
+    e.changed_at as last_read,
     null as time_sensitivity_score,
-    coalesce(array_agg(distinct l.caption) filter (where l.caption is not null), array[]::text[]) as labels,
-    coalesce(array_agg(distinct t.tag_name) filter (where t.tag_name is not null), array[]::text[]) as tags
+    COALESCE(e.tags, array[]::text[]) as tags,
+    e.vote
 from
-    ttrss_entries e
-    join ttrss_user_entries ue on e.id = ue.ref_id
-    join ttrss_feeds f on ue.feed_id = f.id
-    left join ttrss_user_labels2 ul on e.id = ul.article_id
-    left join ttrss_labels2 l on ul.label_id = l.id
-    left join ttrss_tags t on ue.int_id = t.post_int_id
+    entries e
+    join feeds f on e.feed_id = f.id
 where
-    e.date_entered >= now() - interval '1 day' * %(number_of_days)s
+    e.published_at >= now() - interval '1 day' * %(number_of_days)s
     and not exists (
         select 1 from time_sensitivity ts
         where ts.article_id = e.id
     )
-group by
-    e.id,
-    e.title,
-    ue.marked,
-    ue.score,
-    f.title,
-    e.content,
-    e.link,
-    e.author,
-    e.date_entered,
-    ue.last_read
 order by
     e.id asc;
