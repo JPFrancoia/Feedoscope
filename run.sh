@@ -10,7 +10,7 @@ if [ -f .envrc ]; then
 fi
 
 # Start port-forward in the background
-kubectl -n ttrss port-forward service/db 5432:5432 > /dev/null 2>&1 &
+kubectl -n perso port-forward service/miniflux-db 5432:5432 > /dev/null 2>&1 &
 PF_PID=$!
 echo $PF_PID > /tmp/db_port_forward.pid
 echo "Port-forward started (PID $PF_PID)."
