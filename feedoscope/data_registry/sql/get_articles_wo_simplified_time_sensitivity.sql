@@ -1,4 +1,4 @@
--- Get articles from the last year that don't yet have a simplified time sensitivity score.
+-- Get articles from the last 6 months that don't yet have a simplified time sensitivity score.
 -- Used to build training data for the distilled urgency model.
 select
     e.id as article_id,
@@ -18,7 +18,7 @@ from
     entries e
     join feeds f on e.feed_id = f.id
 where
-    e.published_at > now() - interval '1 year'
+    e.published_at > now() - interval '6 months'
     and not exists (
         select 1 from time_sensitivity_simplified tss
         where tss.article_id = e.id
