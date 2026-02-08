@@ -8,7 +8,12 @@ from psycopg.rows import DictRow, dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from feedoscope import config
-from feedoscope.entities import Article, TimeSensitivity
+from feedoscope.entities import (
+    Article,
+    SimplifiedTimeSensitivity,
+    TimeSensitivity,
+    UrgencyInferenceResults,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -273,3 +278,150 @@ async def register_time_sensitivity_for_articles(
                 sensitivity.explanation,
             )
             await copy.write_row(row)
+
+
+# --- Simplified time sensitivity (Phase 2: decoder model labeling) ---
+
+
+async def get_articles_wo_simplified_time_sensitivity() -> list[Article]:
+    """Get all articles that don't yet have a simplified time sensitivity score.
+
+    No filter on status or date — scores the entire database to build training
+    data for the distilled urgency model. Re-runnable: only returns articles
+    missing from time_sensitivity_simplified.
+
+    Returns:
+        All articles without a simplified time sensitivity score.
+
+    """
+    query = _get_query_from_file("get_articles_wo_simplified_time_sensitivity.sql")
+
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(query)
+        data = await cur.fetchall()
+
+    return [Article(**article) for article in data]
+
+
+async def register_simplified_time_sensitivity(
+    time_sensitivities: list[SimplifiedTimeSensitivity],
+) -> None:
+    """Bulk insert simplified time sensitivity scores via COPY.
+
+    Args:
+        time_sensitivities: List of simplified time sensitivity results to insert.
+
+    """
+    query = _get_query_from_file("register_simplified_time_sensitivity.sql")
+
+    async with (
+        global_pool.connection() as conn,
+        conn.cursor() as cur,
+        cur.copy(query) as copy,
+    ):
+        for sensitivity in time_sensitivities:
+            row = (
+                sensitivity.article_id,
+                sensitivity.score,
+                sensitivity.explanation,
+            )
+            await copy.write_row(row)
+
+
+# --- Training data for distilled urgency model (Phase 3) ---
+
+
+async def get_articles_with_simplified_time_sensitivity() -> list[tuple[Article, int]]:
+    """Get all articles with their simplified time sensitivity labels.
+
+    Used for training the distilled urgency ModernBERT model. Returns article
+    data joined with the binary urgency label (0 or 1).
+
+    Returns:
+        List of (Article, urgency_label) tuples.
+
+    """
+    query = _get_query_from_file("get_articles_with_simplified_time_sensitivity.sql")
+
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(query)
+        data = await cur.fetchall()
+
+    results: list[tuple[Article, int]] = []
+    for row in data:
+        urgency_label = row.pop("urgency_label")
+        article = Article(**row)
+        results.append((article, urgency_label))
+
+    return results
+
+
+# --- Urgency inference caching (Phase 4: distilled model) ---
+
+
+async def get_articles_wo_urgency_inference(
+    number_of_days: int = 14,
+) -> list[Article]:
+    """Get recent unread articles without a cached urgency inference score.
+
+    Only processes articles that haven't been scored yet by the distilled
+    urgency model. Used by llm_infer_urgency.py.
+
+    Args:
+        number_of_days: Number of days to look back for unread articles.
+
+    Returns:
+        List of unread articles without cached urgency scores.
+
+    """
+    query = _get_query_from_file("get_articles_wo_urgency_inference.sql")
+
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(query, {"number_of_days": number_of_days})
+        data = await cur.fetchall()
+
+    return [Article(**article) for article in data]
+
+
+async def register_urgency_inference(
+    results: UrgencyInferenceResults,
+) -> None:
+    """Bulk insert urgency inference scores via COPY.
+
+    Args:
+        results: Urgency inference results containing article IDs and scores.
+
+    """
+    query = _get_query_from_file("register_urgency_inference.sql")
+
+    async with (
+        global_pool.connection() as conn,
+        conn.cursor() as cur,
+        cur.copy(query) as copy,
+    ):
+        for article_id, score in zip(results.article_ids, results.urgency_scores):
+            await copy.write_row((article_id, score))
+
+
+async def get_urgency_scores_for_articles(
+    article_ids: list[int],
+) -> dict[int, float]:
+    """Fetch cached urgency scores for a set of articles.
+
+    Used by main.py to look up urgency probabilities for time-decay calculation.
+
+    Args:
+        article_ids: List of article IDs to look up.
+
+    Returns:
+        Dict mapping article_id to urgency_score (0.0 to 1.0).
+        Articles without a cached score are not included.
+
+    """
+    query = _get_query_from_file("get_urgency_scores_for_articles.sql")
+
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(query, {"article_ids": article_ids})
+        data = await cur.fetchall()
+
+    return {row["article_id"]: row["urgency_score"] for row in data}

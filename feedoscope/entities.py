@@ -51,3 +51,26 @@ class TimeSensitivity(BaseModel):
 
     confidence: ConfidenceLevel
     explanation: str
+
+
+class SimplifiedTimeSensitivity(BaseModel):
+    """Simplified binary time sensitivity from decoder model (Ministral-8B).
+
+    0 = not urgent (evergreen, still relevant in one year)
+    1 = urgent (ephemeral, loses relevance within a year)
+    """
+
+    article_id: int
+    score: Literal[0, 1]
+    explanation: str
+
+
+class UrgencyInferenceResults(BaseModel):
+    """Results from the distilled ModernBERT urgency model.
+
+    urgency_scores are probabilities of the "urgent" class (0.0 to 1.0),
+    used for continuous time-decay calculation.
+    """
+
+    article_ids: list[int]
+    urgency_scores: list[float]
