@@ -1,6 +1,5 @@
--- Get all articles that don't yet have a simplified time sensitivity score.
--- No filter on status or date: we want to score the entire database to build
--- training data for the distilled urgency model.
+-- Get articles from the last year that don't yet have a simplified time sensitivity score.
+-- Used to build training data for the distilled urgency model.
 select
     e.id as article_id,
     e.title,
@@ -19,7 +18,8 @@ from
     entries e
     join feeds f on e.feed_id = f.id
 where
-    not exists (
+    e.published_at > now() - interval '1 year'
+    and not exists (
         select 1 from time_sensitivity_simplified tss
         where tss.article_id = e.id
     )

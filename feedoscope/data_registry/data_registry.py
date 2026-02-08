@@ -284,14 +284,14 @@ async def register_time_sensitivity_for_articles(
 
 
 async def get_articles_wo_simplified_time_sensitivity() -> list[Article]:
-    """Get all articles that don't yet have a simplified time sensitivity score.
+    """Get articles from the last year without a simplified time sensitivity score.
 
-    No filter on status or date — scores the entire database to build training
-    data for the distilled urgency model. Re-runnable: only returns articles
+    Filters to articles published within the last year, matching the same window
+    used for relevance model training. Re-runnable: only returns articles
     missing from time_sensitivity_simplified.
 
     Returns:
-        All articles without a simplified time sensitivity score.
+        Articles from the last year without a simplified time sensitivity score.
 
     """
     query = _get_query_from_file("get_articles_wo_simplified_time_sensitivity.sql")
