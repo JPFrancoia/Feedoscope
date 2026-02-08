@@ -1,0 +1,1 @@
+drop table time_sensitivity_simplified;
