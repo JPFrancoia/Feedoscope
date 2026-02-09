@@ -123,9 +123,26 @@ async def infer(
         yield sensitivity
 
 
+async def _register_and_tag_batch(
+    batch: list[SimplifiedTimeSensitivity],
+    tag_ids: dict[str, int],
+) -> None:
+    """Register a batch of simplified time sensitivities and assign urgency tags."""
+    await dr.register_simplified_time_sensitivity(batch)
+    await dr.assign_urgency_tags_for_articles(
+        article_ids=[s.article_id for s in batch],
+        scores=[s.score for s in batch],
+        tag_ids=tag_ids,
+    )
+
+
 async def main() -> None:
     """Score all unscored articles with simplified binary time sensitivity."""
     await dr.global_pool.open(wait=True)
+
+    # Ensure urgency-auto user tags exist and get their IDs.
+    tag_ids = await dr.ensure_urgency_user_tags()
+    logger.info(f"Urgency user tag IDs: {tag_ids}")
 
     articles = await dr.get_articles_wo_simplified_time_sensitivity()
 
@@ -144,7 +161,7 @@ async def main() -> None:
         batch.append(sensitivity)
 
         if len(batch) >= 10:
-            await dr.register_simplified_time_sensitivity(batch)
+            await _register_and_tag_batch(batch, tag_ids)
             total_processed += len(batch)
             logger.info(
                 f"Registered batch of {len(batch)} simplified time sensitivities. "
@@ -154,7 +171,7 @@ async def main() -> None:
 
     # Write remaining items that didn't reach batch size
     if batch:
-        await dr.register_simplified_time_sensitivity(batch)
+        await _register_and_tag_batch(batch, tag_ids)
         total_processed += len(batch)
         logger.info(
             f"Registered final batch of {len(batch)} simplified time sensitivities. "

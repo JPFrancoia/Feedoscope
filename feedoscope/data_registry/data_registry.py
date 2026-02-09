@@ -424,3 +424,61 @@ async def get_urgency_scores_for_articles(
         data = await cur.fetchall()
 
     return {row["article_id"]: row["urgency_score"] for row in data}
+
+
+# --- Urgency-auto user tags ---
+
+
+async def ensure_urgency_user_tags() -> dict[str, int]:
+    """Ensure urgency-auto user tags exist and return their IDs.
+
+    Creates '0-urgency-auto' and '1-urgency-auto' tags for user_id=1
+    if they don't already exist, then fetches their IDs.
+
+    Returns:
+        Dict mapping tag title to tag ID, e.g.
+        {'0-urgency-auto': 42, '1-urgency-auto': 43}.
+
+    """
+    upsert_query = _get_query_from_file("upsert_urgency_user_tags.sql")
+    select_query = _get_query_from_file("ensure_urgency_user_tags.sql")
+
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(upsert_query)
+        await cur.execute(select_query)
+        data = await cur.fetchall()
+
+    return {row["title"]: row["id"] for row in data}
+
+
+async def assign_urgency_tags_for_articles(
+    article_ids: list[int],
+    scores: list[int],
+    tag_ids: dict[str, int],
+) -> None:
+    """Assign urgency-auto user tags based on simplified time sensitivity scores.
+
+    For each article, removes any existing urgency-auto tag and assigns the
+    correct one based on the score (0 or 1).
+
+    Args:
+        article_ids: List of article IDs to tag.
+        scores: Corresponding urgency scores (0 or 1) for each article.
+        tag_ids: Dict mapping tag title to tag ID (from ensure_urgency_user_tags).
+
+    """
+    query = _get_query_from_file("set_urgency_user_tag_for_entry.sql")
+
+    tag_id_by_score = {
+        0: tag_ids["0-urgency-auto"],
+        1: tag_ids["1-urgency-auto"],
+    }
+
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.executemany(
+            query,
+            [
+                {"entry_id": article_id, "user_tag_id": tag_id_by_score[score]}
+                for article_id, score in zip(article_ids, scores)
+            ],
+        )
