@@ -151,7 +151,31 @@ async def train_model(
 
 
 async def main() -> None:
-    """Train the distilled urgency model on LLM-generated binary labels."""
+    """Train the distilled urgency model on LLM-generated binary labels.
+
+    Training data comes from Miniflux user tags, NOT the time_sensitivity_simplified
+    table. Every article tagged "0-urgency" gets label 0 (evergreen), and every
+    article tagged "1-urgency" gets label 1 (time-sensitive).
+
+    These tags are initially assigned by the LLM pipeline (make time_simple), but
+    the user can manually change them in Miniflux to correct misclassifications.
+    Manual corrections are never overwritten by the pipeline, so they always take
+    effect in the next training run.
+
+    Class balancing strategy:
+        Both classes are balanced to the minority class count, but read articles
+        (which the user has likely verified) are ALWAYS kept. Only unread articles
+        are downsampled. If a class has more read articles than the target count,
+        all read articles are still kept (slight class imbalance is acceptable
+        to preserve verified labels).
+
+    Example:
+        10 read + 100 unread with 0-urgency = 110 total
+        10 read + 500 unread with 1-urgency = 510 total
+        Target = 110 (minority class)
+        Class 0: keep all 10 read + all 100 unread = 110
+        Class 1: keep all 10 read + sample 100 from 500 unread = 110
+    """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
 
@@ -168,7 +192,9 @@ async def main() -> None:
 
     await dr.global_pool.open(wait=True)
 
-    # Fetch all articles with urgency user tags (0-urgency or 1-urgency)
+    # Fetch all articles with urgency user tags (0-urgency or 1-urgency).
+    # The tag value is the training label. Both read and unread articles are
+    # included; class balancing below handles the selection.
     labeled_data = await dr.get_articles_with_simplified_time_sensitivity()
 
     if not labeled_data:
@@ -188,9 +214,12 @@ async def main() -> None:
         f"{urgent_count} urgent, {evergreen_count} evergreen."
     )
 
-    # Balance classes, prioritizing read articles (verified by user).
-    # All read articles are always kept. Unread articles fill the remainder
-    # up to the minority class count.
+    # --- Class balancing with read-article priority ---
+    #
+    # Split articles into 4 buckets: (read/unread) x (urgent/evergreen).
+    # Read articles have been seen by the user, so their tags are more
+    # trustworthy. We always keep ALL read articles in the training set.
+    # Only unread articles are subject to downsampling.
     read_urgent = [
         (a, l) for a, l in zip(articles, labels) if l == 1 and a.status == "read"
     ]
@@ -209,14 +238,21 @@ async def main() -> None:
         f"Unread: {len(unread_urgent)} urgent, {len(unread_evergreen)} evergreen."
     )
 
+    # Target count per class = minority class total (read + unread).
     target = min(urgent_count, evergreen_count)
 
-    # For each class: keep all read, sample from unread to reach target
     def _select_class(
         read_items: list[tuple[Article, int]],
         unread_items: list[tuple[Article, int]],
         target_count: int,
     ) -> list[tuple[Article, int]]:
+        """Select articles for one class, always keeping all read articles.
+
+        If read_count >= target_count, all read articles are kept (we accept
+        a slight class imbalance rather than discard verified labels).
+        Otherwise, we randomly sample from unread articles to fill up to
+        target_count.
+        """
         selected = list(read_items)
         remaining = target_count - len(selected)
         if remaining > 0:

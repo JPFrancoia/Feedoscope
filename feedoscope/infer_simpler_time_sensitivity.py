@@ -127,7 +127,23 @@ async def _register_and_tag_batch(
     batch: list[SimplifiedTimeSensitivity],
     tag_ids: dict[str, int],
 ) -> None:
-    """Register a batch of simplified time sensitivities and assign urgency tags."""
+    """Register a batch of simplified time sensitivities and assign urgency tags.
+
+    Two things happen for each article in the batch:
+
+    1. The LLM-assigned score (0 or 1) is stored in the time_sensitivity_simplified
+       table. This is the raw LLM output and is always written.
+
+    2. A "0-urgency" or "1-urgency" user tag is assigned to the article in Miniflux.
+       This tag is ONLY set if the article doesn't already have an urgency tag.
+       If the user has already manually tagged the article (e.g. to correct a
+       misclassification), that manual tag is preserved and the LLM's tag
+       assignment is silently skipped.
+
+    The user tags serve as the ground-truth labels for training the distilled
+    urgency model (make train_urgency). By never overwriting existing tags,
+    manual corrections are always reflected in the next training run.
+    """
     await dr.register_simplified_time_sensitivity(batch)
     await dr.assign_urgency_tags_for_articles(
         article_ids=[s.article_id for s in batch],
@@ -137,10 +153,23 @@ async def _register_and_tag_batch(
 
 
 async def main() -> None:
-    """Score all unscored articles with simplified binary time sensitivity."""
+    """Score all unscored articles with simplified binary time sensitivity.
+
+    This is the LLM labeling step of the urgency pipeline. It uses Ministral-8B
+    to classify articles as evergreen (0) or time-sensitive (1), then:
+
+    1. Stores the score in the time_sensitivity_simplified table.
+    2. Assigns a "0-urgency" or "1-urgency" user tag in Miniflux — but ONLY
+       if the article doesn't already have an urgency tag. Existing tags
+       (including manual corrections) are never overwritten.
+
+    Only articles from the last 6 months that are NOT already in the
+    time_sensitivity_simplified table are processed (idempotent).
+    """
     await dr.global_pool.open(wait=True)
 
-    # Ensure urgency user tags exist and get their IDs.
+    # Ensure the "0-urgency" and "1-urgency" tag definitions exist in the
+    # Miniflux user_tags table, and fetch their database IDs for later use.
     tag_ids = await dr.ensure_urgency_user_tags()
     logger.info(f"Urgency user tag IDs: {tag_ids}")
 

@@ -427,13 +427,44 @@ async def get_urgency_scores_for_articles(
 
 
 # --- Urgency user tags ---
+#
+# Tagging system overview:
+#
+# The pipeline assigns Miniflux user tags "0-urgency" (evergreen) and
+# "1-urgency" (time-sensitive) to articles. These tags serve two purposes:
+#
+# 1. VISIBILITY: The user can see in Miniflux which urgency class the LLM
+#    assigned to each article.
+#
+# 2. TRAINING LABELS: The training query (get_articles_with_simplified_time_
+#    sensitivity.sql) reads the tag value as the ground-truth label for the
+#    distilled ModernBERT urgency model.
+#
+# Manual corrections:
+#   The user can manually change an article's tag in Miniflux (e.g. switch
+#   "0-urgency" to "1-urgency") to correct an LLM misclassification. The
+#   pipeline will NEVER overwrite an existing urgency tag — if an article
+#   already has either "0-urgency" or "1-urgency", the tag assignment is
+#   skipped entirely (see set_urgency_user_tag_for_entry.sql). This means
+#   manual corrections are always preserved across pipeline re-runs.
+#
+# Tag lifecycle:
+#   - Created by: make time_simple (LLM labels new articles and assigns tags)
+#   - Read by:    make train_urgency (training query uses tags as labels)
+#   - Modified by: user manually in Miniflux (to correct misclassifications)
+#   - Never overwritten by: the pipeline (INSERT-only, no DELETE)
 
 
 async def ensure_urgency_user_tags() -> dict[str, int]:
     """Ensure urgency user tags exist and return their IDs.
 
-    Creates '0-urgency' and '1-urgency' tags for user_id=1
-    if they don't already exist, then fetches their IDs.
+    Creates '0-urgency' and '1-urgency' tag definitions in the Miniflux
+    user_tags table for user_id=1, if they don't already exist. Then
+    fetches and returns their database IDs.
+
+    These tags are assigned to articles by the simplified time sensitivity
+    pipeline (make time_simple) and used as training labels by the distilled
+    urgency model (make train_urgency).
 
     Returns:
         Dict mapping tag title to tag ID, e.g.
@@ -456,10 +487,12 @@ async def assign_urgency_tags_for_articles(
     scores: list[int],
     tag_ids: dict[str, int],
 ) -> None:
-    """Assign urgency user tags based on simplified time sensitivity scores.
+    """Assign urgency user tags to articles that don't already have one.
 
-    For each article, removes any existing urgency tag and assigns the
-    correct one based on the score (0 or 1).
+    For each article, attempts to assign a "0-urgency" or "1-urgency" tag
+    based on the LLM-assigned score. If the article already has ANY urgency
+    tag (either "0-urgency" or "1-urgency"), the assignment is silently
+    skipped. This preserves manual corrections made by the user.
 
     Args:
         article_ids: List of article IDs to tag.
