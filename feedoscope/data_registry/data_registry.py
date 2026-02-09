@@ -426,18 +426,18 @@ async def get_urgency_scores_for_articles(
     return {row["article_id"]: row["urgency_score"] for row in data}
 
 
-# --- Urgency-auto user tags ---
+# --- Urgency user tags ---
 
 
 async def ensure_urgency_user_tags() -> dict[str, int]:
-    """Ensure urgency-auto user tags exist and return their IDs.
+    """Ensure urgency user tags exist and return their IDs.
 
-    Creates '0-urgency-auto' and '1-urgency-auto' tags for user_id=1
+    Creates '0-urgency' and '1-urgency' tags for user_id=1
     if they don't already exist, then fetches their IDs.
 
     Returns:
         Dict mapping tag title to tag ID, e.g.
-        {'0-urgency-auto': 42, '1-urgency-auto': 43}.
+        {'0-urgency': 42, '1-urgency': 43}.
 
     """
     upsert_query = _get_query_from_file("upsert_urgency_user_tags.sql")
@@ -456,9 +456,9 @@ async def assign_urgency_tags_for_articles(
     scores: list[int],
     tag_ids: dict[str, int],
 ) -> None:
-    """Assign urgency-auto user tags based on simplified time sensitivity scores.
+    """Assign urgency user tags based on simplified time sensitivity scores.
 
-    For each article, removes any existing urgency-auto tag and assigns the
+    For each article, removes any existing urgency tag and assigns the
     correct one based on the score (0 or 1).
 
     Args:
@@ -470,8 +470,8 @@ async def assign_urgency_tags_for_articles(
     query = _get_query_from_file("set_urgency_user_tag_for_entry.sql")
 
     tag_id_by_score = {
-        0: tag_ids["0-urgency-auto"],
-        1: tag_ids["1-urgency-auto"],
+        0: tag_ids["0-urgency"],
+        1: tag_ids["1-urgency"],
     }
 
     async with global_pool.connection() as conn, conn.cursor() as cur:

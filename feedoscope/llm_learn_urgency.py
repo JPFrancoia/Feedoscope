@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import logging
 import os
+import random
 import shutil
 import time
 from typing import Any
@@ -167,12 +168,12 @@ async def main() -> None:
 
     await dr.global_pool.open(wait=True)
 
-    # Fetch all articles with simplified time sensitivity labels
+    # Fetch all articles with urgency user tags (0-urgency or 1-urgency)
     labeled_data = await dr.get_articles_with_simplified_time_sensitivity()
 
     if not labeled_data:
         logger.error(
-            "No articles with simplified time sensitivity labels found. "
+            "No articles with urgency user tags found. "
             "Run infer_simpler_time_sensitivity first."
         )
         return
@@ -187,25 +188,61 @@ async def main() -> None:
         f"{urgent_count} urgent, {evergreen_count} evergreen."
     )
 
-    # Balance classes by downsampling the majority class
-    min_count = min(urgent_count, evergreen_count)
-
-    urgent_articles = [(a, l) for a, l in zip(articles, labels) if l == 1][-min_count:]
-    evergreen_articles = [(a, l) for a, l in zip(articles, labels) if l == 0][
-        -min_count:
+    # Balance classes, prioritizing read articles (verified by user).
+    # All read articles are always kept. Unread articles fill the remainder
+    # up to the minority class count.
+    read_urgent = [
+        (a, l) for a, l in zip(articles, labels) if l == 1 and a.status == "read"
+    ]
+    read_evergreen = [
+        (a, l) for a, l in zip(articles, labels) if l == 0 and a.status == "read"
+    ]
+    unread_urgent = [
+        (a, l) for a, l in zip(articles, labels) if l == 1 and a.status != "read"
+    ]
+    unread_evergreen = [
+        (a, l) for a, l in zip(articles, labels) if l == 0 and a.status != "read"
     ]
 
-    balanced_data = urgent_articles + evergreen_articles
+    logger.info(
+        f"Read: {len(read_urgent)} urgent, {len(read_evergreen)} evergreen. "
+        f"Unread: {len(unread_urgent)} urgent, {len(unread_evergreen)} evergreen."
+    )
+
+    target = min(urgent_count, evergreen_count)
+
+    # For each class: keep all read, sample from unread to reach target
+    def _select_class(
+        read_items: list[tuple[Article, int]],
+        unread_items: list[tuple[Article, int]],
+        target_count: int,
+    ) -> list[tuple[Article, int]]:
+        selected = list(read_items)
+        remaining = target_count - len(selected)
+        if remaining > 0:
+            sampled = random.sample(unread_items, min(remaining, len(unread_items)))
+            selected.extend(sampled)
+        return selected
+
+    selected_urgent = _select_class(read_urgent, unread_urgent, target)
+    selected_evergreen = _select_class(read_evergreen, unread_evergreen, target)
+
+    balanced_data = selected_urgent + selected_evergreen
     articles = [a for a, _ in balanced_data]
     labels = [l for _, l in balanced_data]
 
-    logger.info(f"Balanced to {min_count} articles per class ({min_count * 2} total).")
+    actual_urgent = sum(labels)
+    actual_evergreen = len(labels) - actual_urgent
+    logger.info(
+        f"Balanced to {actual_urgent} urgent, {actual_evergreen} evergreen "
+        f"({len(labels)} total)."
+    )
 
     model_path = (
         f"models/{URGENCY_MODEL_PREFIX}"
         f"_{MAX_LENGTH}_{EPOCHS}_epochs_{BATCH_SIZE}_batch_size"
         f"_{datetime.date.today().strftime('%Y_%m_%d')}"
-        f"_{min_count}_urgent_{min_count}_evergreen"
+        f"_{actual_urgent}_urgent_{actual_evergreen}_evergreen"
     )
 
     if os.path.exists(model_path):

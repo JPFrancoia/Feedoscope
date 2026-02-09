@@ -35,6 +35,7 @@ class Article(BaseModel):
     time_sensitivity_score: Optional[Literal[1, 2, 3, 4, 5]] = Field(...)
     tags: list[str]  # Directly from entries.tags array in Miniflux
     vote: int  # -1, 0, or 1 in Miniflux
+    status: str  # 'read', 'unread', or 'removed' in Miniflux
 
 
 class RelevanceInferenceResults(BaseModel):

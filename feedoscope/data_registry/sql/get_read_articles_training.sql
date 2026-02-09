@@ -15,6 +15,7 @@ with numbered_articles as (
         ts.score as time_sensitivity_score,
         COALESCE(e.tags, array[]::text[]) as tags,
         e.vote,
+        e.status,
         row_number() over (order by e.id asc) as rn
     from
         entries e
@@ -39,7 +40,8 @@ select
     last_read,
     time_sensitivity_score,
     tags,
-    vote
+    vote,
+    status
 from
     numbered_articles
 where

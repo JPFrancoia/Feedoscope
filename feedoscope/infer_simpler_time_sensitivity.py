@@ -140,7 +140,7 @@ async def main() -> None:
     """Score all unscored articles with simplified binary time sensitivity."""
     await dr.global_pool.open(wait=True)
 
-    # Ensure urgency-auto user tags exist and get their IDs.
+    # Ensure urgency user tags exist and get their IDs.
     tag_ids = await dr.ensure_urgency_user_tags()
     logger.info(f"Urgency user tag IDs: {tag_ids}")
 

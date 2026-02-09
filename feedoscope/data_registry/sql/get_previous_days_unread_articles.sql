@@ -13,7 +13,8 @@ select
     e.changed_at as last_read,
     ts.score as time_sensitivity_score,
     COALESCE(e.tags, array[]::text[]) as tags,
-    e.vote
+    e.vote,
+    e.status
 from
     entries e
     join feeds f on e.feed_id = f.id
