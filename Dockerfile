@@ -34,11 +34,14 @@ RUN uv sync --locked --no-editable --no-group dev --no-group infer
 
 FROM python:3.12-slim AS runtime
 
-# Install runtime dependencies (libpq for psycopg, postgresql-client for migrations)
-# CUDA runtime libs (cudart, cublas, etc.) are bundled via PyTorch's nvidia-* pip packages
+# Install runtime dependencies:
+#   libpq for psycopg, postgresql-client for migrations,
+#   gcc for Triton JIT compilation of CUDA kernels at runtime.
+# CUDA runtime libs (cudart, cublas, etc.) are bundled via PyTorch's nvidia-* pip packages.
 RUN apt-get update && apt-get install -y \
     libpq-dev \
     postgresql-client \
+    gcc \
     && rm -rf /var/lib/apt/lists/*
 
 # Place executables in the environment at the front of the path
