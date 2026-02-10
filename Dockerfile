@@ -29,25 +29,16 @@ RUN uv sync --locked --no-editable --no-group dev --no-group infer
 
 FROM python:3.12-slim AS runtime
 
-# Install runtime dependencies and CUDA runtime libraries
-# CUDA runtime is needed to execute GPU-accelerated code at runtime
+# Install runtime dependencies (libpq for psycopg, postgresql-client for migrations)
+# CUDA runtime libs (cudart, cublas, etc.) are bundled via PyTorch's nvidia-* pip packages
 RUN apt-get update && apt-get install -y \
     libpq-dev \
     postgresql-client \
-    wget \
-    gnupg \
-    ca-certificates \
-    && wget https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb \
-    && dpkg -i cuda-keyring_1.1-1_all.deb \
-    && rm cuda-keyring_1.1-1_all.deb \
-    && apt-get update \
-    && apt-get install -y cuda-cudart-12-8 libcublas-12-8 \
     && rm -rf /var/lib/apt/lists/*
 
 # Place executables in the environment at the front of the path
 ENV VIRTUAL_ENV=/app/.venv \
     PATH="/app/.venv/bin:$PATH" \
-    LD_LIBRARY_PATH="/usr/local/cuda-12.8/lib64" \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
