@@ -14,6 +14,11 @@ ENV UV_COMPILE_BYTECODE=1
 # Disable UV cache to avoid storing package downloads
 ENV UV_NO_CACHE=1
 
+# Use the system Python from the base image, not a uv-managed one.
+# Without this, uv downloads its own Python to match .python-version exactly,
+# creating venv symlinks that break in the runtime stage.
+ENV UV_PYTHON_PREFERENCE=only-system
+
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
