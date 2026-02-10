@@ -37,7 +37,7 @@ RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
     ca-certificates \
-    && wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
+    && wget https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb \
     && dpkg -i cuda-keyring_1.1-1_all.deb \
     && rm cuda-keyring_1.1-1_all.deb \
     && apt-get update \
@@ -47,7 +47,7 @@ RUN apt-get update && apt-get install -y \
 # Place executables in the environment at the front of the path
 ENV VIRTUAL_ENV=/app/.venv \
     PATH="/app/.venv/bin:$PATH" \
-    LD_LIBRARY_PATH="/usr/local/cuda-12.8/lib64:${LD_LIBRARY_PATH}" \
+    LD_LIBRARY_PATH="/usr/local/cuda-12.8/lib64" \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
