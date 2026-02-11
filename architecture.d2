@@ -1,0 +1,135 @@
+# Feedoscope - Architecture Diagram
+
+direction: right
+
+# --- External nodes ---
+internet: Internet {
+  icon: https://icons.terrastruct.com/essentials%2F092-network.svg
+  shape: image
+}
+
+client: Client {
+  icon: https://icons.terrastruct.com/tech%2F052-smartphone-3.svg
+  shape: image
+}
+
+local_workstation: LLM Urgency Labeling\n(local workstation + GPU) {
+  style: {
+    stroke: "#8B5CF6"
+    font-color: "#5B21B6"
+    fill: "#EDE9FE"
+    border-radius: 8
+  }
+}
+
+# --- Kubernetes Cluster ---
+k8s_cluster: Self-hosted Kubernetes Cluster {
+  label.near: top-center
+  style: {
+    stroke: "#147EBA"
+    font-color: "#147EBA"
+    fill: "#EFF6FB"
+  }
+
+  miniflux: Miniflux\n(Backend + UI) {
+    style: {
+      stroke: "#FFA54F"
+      font-color: "#A65B00"
+      fill: "#FFD8B1"
+    }
+  }
+
+  feedoscope: Feedoscope ML Pipeline (GPU-powered) {
+    style: {
+      stroke: "#6B7280"
+      font-color: "#374151"
+      fill: "#F3F4F6"
+      border-radius: 8
+    }
+
+    # Training jobs (green)
+    relevance_train: Relevance\nTraining {
+      style: {
+        stroke: "#059669"
+        font-color: "#065F46"
+        fill: "#D1FAE5"
+      }
+    }
+
+    urgency_train: Urgency\nTraining {
+      style: {
+        stroke: "#059669"
+        font-color: "#065F46"
+        fill: "#D1FAE5"
+      }
+    }
+
+    # Models bridge training -> inference
+    relevance_model: Relevance\nModel {
+      style: {
+        stroke: "#6B7280"
+        font-color: "#374151"
+        fill: "#E5E7EB"
+      }
+    }
+
+    urgency_model: Urgency\nModel {
+      style: {
+        stroke: "#6B7280"
+        font-color: "#374151"
+        fill: "#E5E7EB"
+      }
+    }
+
+    relevance_train -> relevance_model
+    urgency_train -> urgency_model
+
+    # Inference jobs (blue)
+    urgency_infer: Urgency\nInference {
+      style: {
+        stroke: "#2563EB"
+        font-color: "#1E40AF"
+        fill: "#DBEAFE"
+      }
+    }
+
+    relevance_infer: Relevance\nInference {
+      style: {
+        stroke: "#2563EB"
+        font-color: "#1E40AF"
+        fill: "#DBEAFE"
+      }
+    }
+
+    relevance_model -> relevance_infer
+    urgency_model -> urgency_infer
+  }
+
+  db: Postgres Database {
+    icon: https://icons.terrastruct.com/essentials%2F117-database.svg
+    shape: image
+  }
+}
+
+# --- Connections ---
+
+# External flows
+internet -> k8s_cluster.miniflux: RSS feeds
+k8s_cluster.miniflux -> client
+client -> k8s_cluster.miniflux: reads, votes,\ntag corrections
+
+# Miniflux is the true read/write user of the DB
+k8s_cluster.miniflux <-> k8s_cluster.db
+
+# LLM labeling writes urgency labels into the DB
+local_workstation -> k8s_cluster.db: urgency labels {
+  style.stroke: "#8B5CF6"
+}
+
+# Training reads from DB
+k8s_cluster.db -> k8s_cluster.feedoscope.relevance_train: training data
+k8s_cluster.db -> k8s_cluster.feedoscope.urgency_train: training data
+
+# Inference writes scores back to DB
+k8s_cluster.feedoscope.urgency_infer -> k8s_cluster.db: evaluates urgency
+k8s_cluster.feedoscope.relevance_infer -> k8s_cluster.db: evaluates relevance
