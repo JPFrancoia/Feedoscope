@@ -55,6 +55,7 @@ VALIDATION_SIZE = 0
 EPOCHS = 2  # Number of epochs for training
 BATCH_SIZE = 16  # Batch size for training
 # BATCH_SIZE = 8  # Batch size for training
+EXCELLENT_WEIGHT = 3.0  # Weight multiplier for upvoted/starred articles
 
 
 def compute_metrics(eval_pred: EvalPrediction) -> dict[str, float | np.floating]:
@@ -95,6 +96,34 @@ class ProgressLoggingCallback(TrainerCallback):
         )
 
 
+class WeightedTrainer(Trainer):
+    """Trainer subclass that applies per-sample loss weighting.
+
+    Expects a ``weight`` column in the dataset. Upvoted or starred articles
+    receive a higher weight so the model learns to score them higher.
+    """
+
+    def compute_loss(
+        self,
+        model,
+        inputs,
+        return_outputs=False,
+        **kwargs,
+    ):
+        labels = inputs.pop("labels")
+        weights = inputs.pop("weight")
+        outputs = model(**inputs)
+        logits = outputs.logits
+
+        loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
+        loss = loss_fct(logits, labels)
+
+        # Apply per-sample weights and average
+        weighted_loss = (loss * weights).mean()
+
+        return (weighted_loss, outputs) if return_outputs else weighted_loss
+
+
 async def train_model(
     model_path: str,
     tokenizer: PreTrainedTokenizerBase,
@@ -102,18 +131,39 @@ async def train_model(
     bad_articles: list[Article],
 ) -> Trainer:
 
-    all_articles = utils.prepare_articles_text(good_articles + bad_articles)
+    all_articles_raw = good_articles + bad_articles
+    all_articles = utils.prepare_articles_text(all_articles_raw)
     labels = [1] * len(good_articles) + [0] * len(bad_articles)
+
+    # Assign higher weight to upvoted/starred articles so the model learns
+    # to score them higher than merely-read articles.
+    sample_weights = [
+        EXCELLENT_WEIGHT if (a.vote == 1 or a.starred) else 1.0
+        for a in all_articles_raw
+    ]
+
+    n_excellent = sum(1 for w in sample_weights if w > 1.0)
+    logger.info(
+        f"Sample weights: {n_excellent} excellent articles "
+        f"(weight={EXCELLENT_WEIGHT}), "
+        f"{len(sample_weights) - n_excellent} standard (weight=1.0)"
+    )
 
     # Create Hugging Face Dataset
     dataset = Dataset.from_list(
-        [{"text": text, "label": label} for text, label in zip(all_articles, labels)]
+        [
+            {"text": text, "label": label, "weight": weight}
+            for text, label, weight in zip(all_articles, labels, sample_weights)
+        ]
     )
     split_dataset = dataset.train_test_split(test_size=0.2, seed=42)
 
+    # Drop "text" after tokenization — with remove_unused_columns=False the raw
+    # string column would otherwise be passed to the model and cause errors.
     tokenized = split_dataset.map(
         lambda x: preprocess_function(tokenizer, x, max_length=MAX_LENGTH),
         batched=True,
+        remove_columns=["text"],
     )
 
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
@@ -133,11 +183,14 @@ async def train_model(
         logging_steps=2,
         disable_tqdm=True,
         logging_first_step=True,
+        # Keep the "weight" column so WeightedTrainer.compute_loss() can use it.
+        # Without this, Trainer strips columns not in the model's forward() signature.
+        remove_unused_columns=False,
     )
 
     model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME, num_labels=2)
 
-    trainer = Trainer(
+    trainer = WeightedTrainer(
         model=model,
         args=training_args,
         train_dataset=tokenized["train"],
