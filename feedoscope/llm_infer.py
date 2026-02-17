@@ -70,6 +70,29 @@ def find_latest_model(model_name: str, clean_old_models: bool = True) -> str:
     return os.path.join(models_dir, latest_model)
 
 
+def clean_checkpoints(model_path: str) -> None:
+    """Delete HuggingFace Trainer checkpoint directories inside a saved model.
+
+    During training, the Trainer creates ``checkpoint-*`` subdirectories for each
+    save step/epoch. Once the final model is saved to the same directory, these
+    checkpoints are redundant and waste disk space.
+
+    Args:
+        model_path: Path to the saved model directory.
+    """
+    if not os.path.isdir(model_path):
+        return
+
+    for entry in os.listdir(model_path):
+        entry_path = os.path.join(model_path, entry)
+        if os.path.isdir(entry_path) and entry.startswith("checkpoint-"):
+            try:
+                shutil.rmtree(entry_path)
+                logger.info(f"Deleted checkpoint: {entry_path}")
+            except Exception as e:
+                logger.error(f"Failed to delete checkpoint {entry_path}: {e}")
+
+
 async def infer(recent_unread_articles: list[Article]) -> RelevanceInferenceResults:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

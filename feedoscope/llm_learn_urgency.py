@@ -34,6 +34,7 @@ from custom_logging import init_logging
 from feedoscope import config, utils
 from feedoscope.data_registry import data_registry as dr
 from feedoscope.entities import Article
+from feedoscope.llm_infer import clean_checkpoints, find_latest_model
 
 logger = logging.getLogger(__name__)
 
@@ -298,7 +299,11 @@ async def main() -> None:
         logger.info("Training new urgency model...")
         trainer = await train_model(model_path, tokenizer, articles, labels)
         trainer.save_model(model_path)
+        clean_checkpoints(model_path)
         logger.info(f"Model saved to {model_path}")
+
+    # Delete any older urgency models, keeping only the latest.
+    find_latest_model(URGENCY_MODEL_PREFIX, clean_old_models=True)
 
     elapsed_time = time.time() - start_time
     logger.info(f"Training completed in {elapsed_time:.2f} seconds.")
