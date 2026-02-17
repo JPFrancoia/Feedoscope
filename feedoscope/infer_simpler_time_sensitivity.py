@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, cast
 
 from bs4 import BeautifulSoup
 from cleantext import clean  # type: ignore[import]
@@ -97,13 +97,16 @@ async def infer(
             prepare_content(article.content, llm, clean_title),
         )
 
-        output = llm(
-            prompt=final_prompt,
-            max_tokens=256,
-            stop=["[/INST]"],
-            echo=False,
+        output = cast(
+            dict[str, Any],
+            llm(
+                prompt=final_prompt,
+                max_tokens=256,
+                stop=["[/INST]"],
+                echo=False,
+            ),
         )
-        result = output.get("choices")[0]["text"]
+        result = output["choices"][0]["text"]
 
         try:
             parsed_result = best_effort_json_parse(result)
