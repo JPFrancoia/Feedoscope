@@ -83,7 +83,21 @@ async def main() -> None:
     # This uses the distilled ModernBERT urgency model and writes results
     # to the urgency_inference table.
     logger.info("Starting urgency inference for uncached articles...")
-    await llm_infer_urgency.main(LOOKBACK_DAYS)
+    urgency_articles = await dr.get_articles_wo_urgency_inference(
+        number_of_days=LOOKBACK_DAYS
+    )
+    logger.info(
+        f"Fetched {len(urgency_articles)} articles without urgency inference "
+        f"from the last {LOOKBACK_DAYS} days."
+    )
+    if urgency_articles:
+        urgency_results = await llm_infer_urgency.infer(urgency_articles)
+        await dr.register_urgency_inference(urgency_results)
+        logger.info(
+            f"Cached urgency scores for {len(urgency_results.article_ids)} articles."
+        )
+    else:
+        logger.info("No articles need urgency inference.")
 
     # Step 2: Get articles that need relevance scoring.
     # Recent unread + sampled old-ish unread articles.
