@@ -56,7 +56,7 @@ VALIDATION_SIZE = 0
 EPOCHS = 2  # Number of epochs for training
 BATCH_SIZE = 16  # Batch size for training
 # BATCH_SIZE = 8  # Batch size for training
-EXCELLENT_WEIGHT = 3.0  # Weight multiplier for upvoted/starred articles
+EXCELLENT_WEIGHT = config.EXCELLENT_WEIGHT
 
 
 def compute_metrics(eval_pred: EvalPrediction) -> dict[str, float | np.floating]:

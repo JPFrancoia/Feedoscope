@@ -24,3 +24,5 @@ LOGGING_CONFIG = os.getenv("LOGGING_CONFIG", "logging.conf")
 ALLOW_TRAINING_WO_GPU = strtobool(os.getenv("ALLOW_TRAINING_WO_GPU", "False"))
 
 ALLOW_INFERENCE_WO_GPU = strtobool(os.getenv("ALLOW_INFERENCE_WO_GPU", "False"))
+
+EXCELLENT_WEIGHT = float(os.getenv("EXCELLENT_WEIGHT", "3.0"))
