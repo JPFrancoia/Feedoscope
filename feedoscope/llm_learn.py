@@ -232,12 +232,25 @@ async def main() -> None:
     bad_articles = await dr.get_published_articles(validation_size=VALIDATION_SIZE)
     good_articles = await dr.get_read_articles_training(validation_size=VALIDATION_SIZE)
 
-    # Ensure equal number of good and bad articles. Use the most recent articles from both.
+    # Ensure roughly equal number of good and bad articles, but always keep
+    # starred/upvoted ("excellent") articles so they are never dropped.
     min_count = min(len(good_articles), len(bad_articles))
-    good_articles = good_articles[-min_count:]
+
+    excellent = [a for a in good_articles if a.vote == 1 or a.starred]
+    regular = [a for a in good_articles if not (a.vote == 1 or a.starred)]
+
+    # Fill remaining slots with the most recent regular articles.
+    remaining_slots = max(0, min_count - len(excellent))
+    regular = regular[-remaining_slots:] if remaining_slots > 0 else []
+    good_articles = sorted(regular + excellent, key=lambda a: a.article_id)
+
     bad_articles = bad_articles[-min_count:]
 
-    logger.debug(f"Collected {len(good_articles)} good articles.")
+    n_protected = len(excellent)
+    logger.debug(
+        f"Collected {len(good_articles)} good articles "
+        f"({n_protected} starred/upvoted always kept)."
+    )
     logger.debug(f"Collected {len(bad_articles)} bad articles.")
 
     # Add the date to the model path to make sure trained models can be sorted.
