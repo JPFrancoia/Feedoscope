@@ -45,6 +45,9 @@ infer_urgency:
 full_infer:
 	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.main
 
+eval:
+	LOGGING_CONFIG=dev_logging.conf VALIDATION_SIZE=100 uv run python -m feedoscope.eval_models
+
 up:
 	migrate -database ${DATABASE_URL} -path db/migrations up 1
 
