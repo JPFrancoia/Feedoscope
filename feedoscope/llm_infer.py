@@ -18,9 +18,9 @@ from feedoscope.entities import Article, RelevanceInferenceResults
 
 logger = logging.getLogger(__name__)
 
-# https://huggingface.co/blog/modernbert
+# https://huggingface.co/blog/ettin
 
-MODEL_NAME = "answerdotai-ModernBERT-base_512_2_epochs_16_batch_size"
+MODEL_NAME = "jhu-clsp-ettin-encoder-150m_512_2_epochs_16_batch_size"
 MAX_LENGTH = 512  # Maximum length for the tokenizer
 INFERENCE_BATCH_SIZE = 128
 
@@ -33,7 +33,7 @@ def find_latest_model(model_name: str, clean_old_models: bool = True) -> str:
     latest. This should be true if the model names include the training date.
 
     Args:
-        model_name: family of model to use, e.g. "answerdotai-ModernBERT-base"
+        model_name: family of model to use, e.g. "jhu-clsp-ettin-encoder-150m"
         clean_old_models: if True, delete all older models starting with model_name
             except the latest one
 

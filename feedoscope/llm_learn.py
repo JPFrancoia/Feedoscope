@@ -41,14 +41,13 @@ from feedoscope.llm_infer import clean_checkpoints, find_latest_model
 
 logger = logging.getLogger(__name__)
 
-# https://huggingface.co/blog/modernbert
-
-# TODO: try modernbert large or deberta v3 large
+# https://huggingface.co/blog/ettin
 
 # MODEL_NAME = "distilbert/distilbert-base-uncased"
-MODEL_NAME = "answerdotai/ModernBERT-base"
+# MODEL_NAME = "answerdotai/ModernBERT-base"
+MODEL_NAME = "jhu-clsp/ettin-encoder-150m"
 # MODEL_NAME = "FacebookAI/roberta-base"
-# MODEL_NAME = "answerdotai/ModernBERT-large"
+# MODEL_NAME = "jhu-clsp/ettin-encoder-400m"
 # MAX_LENGTH = 4096  # Maximum length for the tokenizer
 MAX_LENGTH = 512  # Maximum length for the tokenizer
 # MAX_LENGTH = 1024  # Maximum length for the tokenizer

@@ -35,7 +35,7 @@ from feedoscope.entities import Article
 logger = logging.getLogger(__name__)
 
 # Eval model paths use these prefixes. They do NOT match any production model
-# prefix (answerdotai-ModernBERT-base_* or urgency-ModernBERT-base_*), so
+# prefix (jhu-clsp-ettin-encoder-150m_* or urgency-ModernBERT-base_*), so
 # find_latest_model() will never find or delete them.
 EVAL_RELEVANCE_PREFIX = "eval_relevance"
 EVAL_URGENCY_PREFIX = "eval_urgency"
