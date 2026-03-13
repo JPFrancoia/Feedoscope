@@ -121,15 +121,12 @@ def _run_inference(
 async def eval_relevance(device: torch.device) -> None:
     """Evaluate the relevance model accuracy.
 
-    Uses the existing VALIDATION_SIZE mechanism: the SQL queries for training
-    data (get_read_articles_training, get_published_articles) skip the first
-    VALIDATION_SIZE articles by ID order. The companion queries
-    (get_sample_good, get_sample_not_good) return exactly those held-out
-    articles.
+    Fetches ALL good/bad articles (no SQL-level holdout), then randomly
+    samples VALIDATION_SIZE from each class for the eval set. Trains on
+    the remaining articles with the same class-balancing as production,
+    then evaluates on the held-out random sample.
 
-    The eval model is trained on the non-held-out data with the same
-    class-balancing as production, then evaluated against the held-out set.
-    The model is discarded after metrics are computed.
+    The eval model is discarded after metrics are computed.
     """
     validation_size = config.VALIDATION_SIZE
     logger.info(
@@ -138,13 +135,36 @@ async def eval_relevance(device: torch.device) -> None:
 
     start_time = time.time()
 
-    # Fetch training data with holdout excluded (same as llm_learn.main).
-    bad_articles = await dr.get_published_articles(validation_size=validation_size)
-    good_articles = await dr.get_read_articles_training(validation_size=validation_size)
+    # Fetch ALL articles (validation_size=0 means no SQL-level holdout).
+    all_good = await dr.get_read_articles_training(validation_size=0)
+    all_bad = await dr.get_published_articles(validation_size=0)
 
     logger.info(
-        f"[Relevance] Fetched {len(good_articles)} good, "
-        f"{len(bad_articles)} bad articles (holdout excluded)."
+        f"[Relevance] Fetched {len(all_good)} good, {len(all_bad)} bad articles total."
+    )
+
+    if len(all_good) < validation_size or len(all_bad) < validation_size:
+        logger.warning(
+            f"[Relevance] Not enough articles to hold out {validation_size} "
+            f"per class (good={len(all_good)}, bad={len(all_bad)}). "
+            "Skipping eval."
+        )
+        return
+
+    # Randomly sample VALIDATION_SIZE articles from each class for eval.
+    eval_good = random.sample(all_good, validation_size)
+    eval_bad = random.sample(all_bad, validation_size)
+
+    eval_good_ids = {a.article_id for a in eval_good}
+    eval_bad_ids = {a.article_id for a in eval_bad}
+
+    # Training set: everything NOT in the eval set.
+    good_articles = [a for a in all_good if a.article_id not in eval_good_ids]
+    bad_articles = [a for a in all_bad if a.article_id not in eval_bad_ids]
+
+    logger.info(
+        f"[Relevance] Eval set: {len(eval_good)} good, {len(eval_bad)} bad "
+        f"(randomly sampled)."
     )
 
     # Class-balance: same logic as llm_learn.main() lines 237-247.
@@ -178,18 +198,6 @@ async def eval_relevance(device: torch.device) -> None:
         assert trainer.model is not None, "Trainer model is None after training"
         model = trainer.model
         logger.info("[Relevance] Eval model trained successfully.")
-
-        # Fetch held-out articles.
-        eval_good = await dr.get_sample_good(validation_size=validation_size)
-        eval_bad = await dr.get_sample_not_good(validation_size=validation_size)
-
-        logger.info(
-            f"[Relevance] Eval set: {len(eval_good)} good, {len(eval_bad)} bad."
-        )
-
-        if not eval_good or not eval_bad:
-            logger.warning("[Relevance] Not enough held-out articles. Skipping eval.")
-            return
 
         # Run inference on held-out set.
         model.to(device)  # type: ignore[operator]
@@ -250,12 +258,10 @@ async def eval_urgency(device: torch.device) -> None:
         )
         return
 
-    # Sort read articles by ID for deterministic holdout.
-    read_data.sort(key=lambda x: x[0].article_id)
-
-    # Hold out the first VALIDATION_SIZE read articles for evaluation.
-    eval_data = read_data[:validation_size]
-    remaining_read_data = read_data[validation_size:]
+    # Randomly sample VALIDATION_SIZE read articles for evaluation.
+    eval_data = random.sample(read_data, validation_size)
+    eval_ids = {a.article_id for a, _ in eval_data}
+    remaining_read_data = [(a, l) for a, l in read_data if a.article_id not in eval_ids]
 
     eval_articles = [a for a, _ in eval_data]
     eval_labels = [l for _, l in eval_data]
@@ -377,6 +383,9 @@ async def main() -> None:
         mes = "GPU not available. Exiting"
         logger.critical(mes)
         raise RuntimeError(mes)
+
+    # Seed for reproducible random sampling within a single run.
+    random.seed(42)
 
     await dr.global_pool.open(wait=True)
 
