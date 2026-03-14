@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # https://huggingface.co/blog/ettin
 
-MODEL_NAME = "jhu-clsp-ettin-encoder-150m_512_2_epochs_16_batch_size"
+MODEL_NAME = "answerdotai-ModernBERT-base_512_2_epochs_16_batch_size"
 MAX_LENGTH = 512  # Maximum length for the tokenizer
 INFERENCE_BATCH_SIZE = 128
 
