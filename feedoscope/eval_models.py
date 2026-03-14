@@ -9,7 +9,10 @@ If VALIDATION_SIZE is 0, the eval is skipped entirely.
 """
 
 import asyncio
+import datetime
+import json
 import logging
+import os
 import random
 import shutil
 import time
@@ -42,13 +45,30 @@ EVAL_URGENCY_PREFIX = "eval_urgency"
 
 MAX_LENGTH = 512
 INFERENCE_BATCH_SIZE = 128
+EVAL_HISTORY_PATH = "models/eval_history.json"
+
+
+def _clean_stale_eval_dirs() -> None:
+    """Remove leftover eval model directories from a previous interrupted run.
+
+    If the eval script was killed (SIGKILL, OOM, etc.) before the ``finally``
+    block could run, the temporary model directories may still exist on disk.
+    Calling this at the start of each run ensures a clean slate.
+    """
+    for prefix in (EVAL_RELEVANCE_PREFIX, EVAL_URGENCY_PREFIX):
+        path = f"models/{prefix}"
+        if os.path.exists(path):
+            logger.warning(
+                f"Found stale eval directory {path} from a previous run. Removing."
+            )
+            shutil.rmtree(path, ignore_errors=True)
 
 
 def compute_and_log_metrics(
     model_name: str,
     true_labels: np.ndarray,
     predicted_probs: np.ndarray,
-) -> None:
+) -> dict[str, float]:
     """Compute classification metrics and log them.
 
     Args:
@@ -56,25 +76,82 @@ def compute_and_log_metrics(
         true_labels: Ground truth binary labels.
         predicted_probs: Predicted probabilities for the positive class.
 
+    Returns:
+        Dictionary of metric names to their float values.
+
     """
     pred_labels = (predicted_probs >= 0.5).astype(int)
 
-    acc = accuracy_score(true_labels, pred_labels)
-    prec = precision_score(true_labels, pred_labels)
-    rec = recall_score(true_labels, pred_labels)
-    f1 = f1_score(true_labels, pred_labels)
-    roc_auc = roc_auc_score(true_labels, predicted_probs)
-    ap = average_precision_score(true_labels, predicted_probs)
-    logloss = log_loss(true_labels, predicted_probs)
+    metrics = {
+        "accuracy": float(accuracy_score(true_labels, pred_labels)),
+        "precision": float(precision_score(true_labels, pred_labels)),
+        "recall": float(recall_score(true_labels, pred_labels)),
+        "f1": float(f1_score(true_labels, pred_labels)),
+        "roc_auc": float(roc_auc_score(true_labels, predicted_probs)),
+        "average_precision": float(
+            average_precision_score(true_labels, predicted_probs)
+        ),
+        "log_loss": float(log_loss(true_labels, predicted_probs)),
+    }
 
     logger.info(f"[{model_name}] Evaluation results:")
-    logger.info(f"[{model_name}]   Accuracy:          {acc:.4f}")
-    logger.info(f"[{model_name}]   Precision:         {prec:.4f}")
-    logger.info(f"[{model_name}]   Recall:            {rec:.4f}")
-    logger.info(f"[{model_name}]   F1:                {f1:.4f}")
-    logger.info(f"[{model_name}]   ROC AUC:           {roc_auc:.4f}")
-    logger.info(f"[{model_name}]   Average Precision: {ap:.4f}")
-    logger.info(f"[{model_name}]   Log Loss:          {logloss:.4f}")
+    logger.info(f"[{model_name}]   Accuracy:          {metrics['accuracy']:.4f}")
+    logger.info(f"[{model_name}]   Precision:         {metrics['precision']:.4f}")
+    logger.info(f"[{model_name}]   Recall:            {metrics['recall']:.4f}")
+    logger.info(f"[{model_name}]   F1:                {metrics['f1']:.4f}")
+    logger.info(f"[{model_name}]   ROC AUC:           {metrics['roc_auc']:.4f}")
+    logger.info(
+        f"[{model_name}]   Average Precision: {metrics['average_precision']:.4f}"
+    )
+    logger.info(f"[{model_name}]   Log Loss:          {metrics['log_loss']:.4f}")
+
+    return metrics
+
+
+def save_eval_results(
+    model_name: str,
+    training_counts: dict[str, int],
+    eval_counts: dict[str, int],
+    metrics: dict[str, float],
+) -> None:
+    """Append an evaluation record to the JSON history file on disk.
+
+    Creates the file if it does not exist. If the file exists but is
+    corrupted, it is overwritten with a fresh list containing only the
+    new record.
+
+    Args:
+        model_name: Name of the model evaluated (e.g. "Relevance", "Urgency").
+        training_counts: Article counts used for training, keyed by class.
+        eval_counts: Article counts used for evaluation, keyed by class.
+        metrics: Metric name to value mapping from ``compute_and_log_metrics``.
+
+    """
+    record = {
+        "date": datetime.date.today().isoformat(),
+        "model": model_name,
+        "training": training_counts,
+        "eval": eval_counts,
+        "metrics": metrics,
+    }
+
+    history: list[dict] = []  # type: ignore[type-arg]
+    if os.path.exists(EVAL_HISTORY_PATH):
+        try:
+            with open(EVAL_HISTORY_PATH) as f:
+                history = json.load(f)
+        except (json.JSONDecodeError, ValueError):
+            logger.warning(
+                f"Could not parse {EVAL_HISTORY_PATH}. Starting fresh history."
+            )
+            history = []
+
+    history.append(record)
+
+    with open(EVAL_HISTORY_PATH, "w") as f:
+        json.dump(history, f, indent=2)
+
+    logger.info(f"[{model_name}] Evaluation results saved to {EVAL_HISTORY_PATH}.")
 
 
 def _run_inference(
@@ -209,7 +286,14 @@ async def eval_relevance(device: torch.device) -> None:
             [np.ones(len(good_probs)), np.zeros(len(bad_probs))]
         )
 
-        compute_and_log_metrics("Relevance", true_labels, all_probs)
+        metrics = compute_and_log_metrics("Relevance", true_labels, all_probs)
+
+        save_eval_results(
+            model_name="Relevance",
+            training_counts={"good": len(good_articles), "bad": len(bad_articles)},
+            eval_counts={"good": len(eval_good), "bad": len(eval_bad)},
+            metrics=metrics,
+        )
 
     finally:
         # Always clean up the eval model.
@@ -357,7 +441,17 @@ async def eval_urgency(device: torch.device) -> None:
         eval_probs = _run_inference(model, tokenizer, eval_articles, device)
         true_labels = np.array(eval_labels)
 
-        compute_and_log_metrics("Urgency", true_labels, eval_probs)
+        metrics = compute_and_log_metrics("Urgency", true_labels, eval_probs)
+
+        save_eval_results(
+            model_name="Urgency",
+            training_counts={
+                "urgent": actual_urgent,
+                "evergreen": actual_evergreen,
+            },
+            eval_counts={"urgent": eval_urgent, "evergreen": eval_evergreen},
+            metrics=metrics,
+        )
 
     finally:
         # Always clean up the eval model.
@@ -386,6 +480,9 @@ async def main() -> None:
 
     # Seed for reproducible random sampling within a single run.
     random.seed(42)
+
+    # Remove any leftover eval model directories from a previous crashed run.
+    _clean_stale_eval_dirs()
 
     await dr.global_pool.open(wait=True)
 
