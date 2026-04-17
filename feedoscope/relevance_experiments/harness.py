@@ -60,11 +60,12 @@ def prepare_single_blob(title: str, content: str) -> str:
     return _clean_text(strip_html_keep_text(f"{clean_title(title)} {content}"))
 
 
-def prepare_title_head_tail(
+def _prepare_chunked_text(
     tokenizer: PreTrainedTokenizerBase,
     title: str,
     content: str,
     max_length: int,
+    include_tail: bool,
 ) -> str:
     cleaned_title = _clean_text(clean_title(title))
     cleaned_body = _clean_text(strip_html_keep_text(content))
@@ -84,7 +85,7 @@ def prepare_title_head_tail(
     tail_ids: list[int] = []
     if len(body_ids) <= remaining_budget:
         head_ids = body_ids
-    else:
+    elif include_tail:
         head_budget = remaining_budget // 2
         tail_budget = remaining_budget - head_budget
         head_ids = body_ids[:head_budget]
@@ -92,6 +93,8 @@ def prepare_title_head_tail(
         if head_budget + tail_budget >= len(body_ids):
             head_ids = body_ids
             tail_ids = []
+    else:
+        head_ids = body_ids[:remaining_budget]
 
     sep = f" {tokenizer.sep_token} " if tokenizer.sep_token else " "
     parts = [tokenizer.decode(kept_title_ids, skip_special_tokens=True).strip()]
@@ -101,6 +104,36 @@ def prepare_title_head_tail(
         parts.append(tokenizer.decode(tail_ids, skip_special_tokens=True).strip())
 
     return sep.join(part for part in parts if part)
+
+
+def prepare_title_head_tail(
+    tokenizer: PreTrainedTokenizerBase,
+    title: str,
+    content: str,
+    max_length: int,
+) -> str:
+    return _prepare_chunked_text(
+        tokenizer=tokenizer,
+        title=title,
+        content=content,
+        max_length=max_length,
+        include_tail=True,
+    )
+
+
+def prepare_title_head(
+    tokenizer: PreTrainedTokenizerBase,
+    title: str,
+    content: str,
+    max_length: int,
+) -> str:
+    return _prepare_chunked_text(
+        tokenizer=tokenizer,
+        title=title,
+        content=content,
+        max_length=max_length,
+        include_tail=False,
+    )
 
 
 def load_snapshot(
@@ -154,6 +187,13 @@ def build_dataset(
                 row["content"],
                 max_length=max_length,
             )
+        elif text_prep_mode == "title_head":
+            text = prepare_title_head(
+                tokenizer,
+                row["title"],
+                row["content"],
+                max_length=max_length,
+            )
         else:
             raise ValueError(f"Unsupported text prep mode: {text_prep_mode}")
 
@@ -198,7 +238,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-length", type=int, required=True)
     parser.add_argument(
         "--text-prep-mode",
-        choices=["single_blob", "title_head_tail"],
+        choices=["single_blob", "title_head_tail", "title_head"],
         default="single_blob",
     )
     parser.add_argument("--output-dir", type=Path, required=True)
