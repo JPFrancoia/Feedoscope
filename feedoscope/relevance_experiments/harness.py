@@ -40,7 +40,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_LEARNING_RATE = 2e-5
 DEFAULT_EPOCHS = 2
-DEFAULT_BATCH_SIZE = 16
+DEFAULT_BATCH_SIZE = 4
+DEFAULT_GRADIENT_ACCUMULATION_STEPS = 4
 DEFAULT_EXCELLENT_WEIGHT = config.EXCELLENT_WEIGHT
 
 
@@ -205,6 +206,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
     parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    parser.add_argument(
+        "--gradient-accumulation-steps",
+        type=int,
+        default=DEFAULT_GRADIENT_ACCUMULATION_STEPS,
+    )
     return parser.parse_args()
 
 
@@ -229,12 +235,13 @@ def main() -> None:
     total_start = time.perf_counter()
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
 
-    train_dataset = build_dataset(
+    balanced_dataset = build_dataset(
         balanced_train_df,
         tokenizer=tokenizer,
         max_length=args.max_length,
         text_prep_mode=args.text_prep_mode,
     )
+    internal_split = balanced_dataset.train_test_split(test_size=0.2, seed=args.seed)
     eval_dataset = build_dataset(
         eval_df,
         tokenizer=tokenizer,
@@ -252,6 +259,7 @@ def main() -> None:
         learning_rate=args.learning_rate,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
         num_train_epochs=args.epochs,
         weight_decay=0.01,
         eval_strategy="epoch",
@@ -268,6 +276,7 @@ def main() -> None:
         remove_unused_columns=False,
         report_to=[],
         save_total_limit=1,
+        fp16=torch.cuda.is_available(),
     )
 
     model = AutoModelForSequenceClassification.from_pretrained(
@@ -278,8 +287,8 @@ def main() -> None:
     trainer = WeightedTrainer(
         model=model,
         args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        train_dataset=internal_split["train"],
+        eval_dataset=internal_split["test"],
         processing_class=tokenizer,
         data_collator=data_collator,
         compute_metrics=lambda pred: compute_metrics(
@@ -322,6 +331,8 @@ def main() -> None:
         "text_prep_mode": args.text_prep_mode,
         "seed": args.seed,
         "train_rows": int(len(balanced_train_df)),
+        "internal_train_rows": int(len(internal_split["train"])),
+        "internal_dev_rows": int(len(internal_split["test"])),
         "eval_rows": int(len(eval_df)),
     }
 
