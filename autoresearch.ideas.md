@@ -1,0 +1,3 @@
+- Stabilize training noise before trusting sub-0.01 AP deltas: try fully deterministic DataLoader/Trainer settings, or compare configs by the mean of 3 repeated runs on the same frozen split instead of a single draw.
+- Sweep simple text-prep variants around the current winner without adding much complexity: `title_only`, `title + first N% of body`, and a 75/25 head/tail split to check whether the tail hurt because it consumed too much of the budget.
+- If the noise problem remains, compare configurations with a larger frozen eval holdout or a second frozen snapshot/seed to reduce overfitting to one split while keeping DB access local-only.

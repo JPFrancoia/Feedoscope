@@ -17,6 +17,10 @@ if [[ ! -d "${SNAPSHOT_DIR}" ]]; then
   exit 1
 fi
 
+export PYTHONHASHSEED="${SEED}"
+export CUBLAS_WORKSPACE_CONFIG=":4096:8"
+export TOKENIZERS_PARALLELISM=false
+
 uv run python -m feedoscope.relevance_experiments.harness \
   --snapshot-dir "${SNAPSHOT_DIR}" \
   --model-name "${MODEL_NAME}" \
