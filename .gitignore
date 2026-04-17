@@ -5,6 +5,7 @@
 *activity.log*
 *saved_models*
 models/
+artifacts/
 test_token.py
 
 *.pkl

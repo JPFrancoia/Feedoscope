@@ -1,0 +1,1 @@
+{"type":"config","name":"Relevance optimization on frozen local Parquet snapshot","metricName":"average_precision","metricUnit":"","bestDirection":"higher"}
