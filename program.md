@@ -5,38 +5,44 @@ dedicated branch instead of creating a new branch.
 
 ## Objective
 
-Improve the relevance model evaluation on a fixed frozen dataset snapshot.
+Improve the relevance model evaluation on the existing frozen dataset snapshot.
 
 Optimize the relevance model only. Ignore urgency.
 
-The first four candidate configurations are mandatory:
+This is a resumed loop, not a bootstrap loop. The current control to beat is the
+best kept run from the latest experiment history:
 
-1. `ModernBERT-base @ 512`
-2. `Ettin-68m @ 1024`
-3. `Ettin-150m @ 512`
-4. `ModernBERT-base @ 512` with `title+head+tail` chunking
+- commit: `a27d7c7`
+- model: `google/embeddinggemma-300m`
+- classifier type: `embedding_linear`
+- max length: `2048`
+- text prep: `single_blob`
+- train balance mode: `full`
+- linear head `C`: `4.0`
+- average precision: `0.9840544956495607`
+- roc auc: `0.96794`
+- log loss: `0.21510`
+- peak vram: `1.69 GB`
 
-Run those four first, in that order, before branching into combinations or follow-up
-ideas.
+The next loop should treat that configuration as the control baseline.
 
 ## Current Repo Context
 
 Relevant files in this repository:
 
-- `feedoscope/llm_learn.py`: relevance training path, current model defaults, batch
-  size, and sequence length.
-- `feedoscope/llm_infer.py`: relevance inference path.
-- `feedoscope/utils.py`: current text preparation (`title + content` as a single
-  cleaned blob).
-- `feedoscope/eval_models.py`: current relevance evaluation logic and metrics.
-- `feedoscope/data_registry/data_registry.py`: DB access helpers.
-- `feedoscope/data_registry/sql/get_read_articles_training.sql`: current positive
-  label query.
-- `feedoscope/data_registry/sql/get_published_articles.sql`: current negative label
-  query.
+- `feedoscope/llm_learn.py`: production relevance training path.
+- `feedoscope/llm_infer.py`: production relevance inference path.
+- `feedoscope/utils.py`: current production text preparation.
+- `feedoscope/eval_models.py`: current evaluation job.
+- `feedoscope/relevance_experiments/export_snapshot.py`: frozen snapshot export.
+- `feedoscope/relevance_experiments/harness.py`: transformer experiment harness.
+- `autoresearch.sh`: main control surface for one experiment run, including the
+  embedding + linear-head path.
+- `autoresearch.jsonl`: append-only experiment history.
+- `autoresearch.ideas.md`: short list of next experiment ideas.
 
-Current label semantics in the repo should be the starting point for the experiment
-snapshot unless the loop intentionally starts a new campaign:
+Current label semantics in the repo remain the starting point for the experiment
+snapshot unless a future campaign explicitly changes them:
 
 - good / relevant: `status = 'read'` and `vote >= 0`
 - bad / not relevant: `vote = -1`
@@ -48,8 +54,7 @@ Primary metric:
 - `average_precision`
 - higher is better
 
-This matches the current training code's best-model metric and is the optimization
-target for this loop.
+This remains the optimization target for the loop.
 
 ## Secondary Metrics
 
@@ -119,60 +124,28 @@ Example connection:
 
 `pgcli -h localhost -u miniflux -d miniflux -p 5432`
 
-## First Step: Freeze the Dataset Locally
+## Frozen Snapshot Rules
 
-Before any baseline or model experiment, export the full relevance experiment dataset
-from PostgreSQL into local Parquet file(s).
-
-This is mandatory.
+The snapshot has already been exported and frozen locally.
 
 Rules:
 
-- Use the database only to read the source data for the experiment snapshot.
-- After the Parquet snapshot is created, all training and evaluation runs must use
-  only the local Parquet data, not repeated live DB queries.
-- Preserve the current relevance dataset definition and filtering behavior unless the
-  loop explicitly decides to start a new experiment campaign.
-- Record snapshot metadata:
-  - snapshot timestamp
-  - SQL / query provenance
-  - random seed
-  - holdout split definition
-  - filtering rules used to create the snapshot
+- Keep using the existing frozen snapshot unless the human explicitly starts a new
+  campaign.
+- Do not re-query the live DB for each run.
+- Keep using the frozen eval split for all comparisons in this loop.
+- Keep the snapshot metadata, seed, and split definition unchanged.
 
-The snapshot must include all fields needed to reproduce the current relevance
-pipeline, including at least:
-
-- `article_id`
-- `title`
-- `content`
-- `vote`
-- `starred`
-- `status`
-- `feed_name` if needed
-- timestamps if needed
-- the binary relevance label or enough information to derive it deterministically
-
-If Parquet support is missing, install `pyarrow` or `fastparquet` with `uv` and then
-continue.
-
-After the snapshot is created:
-
-- all experiments must train and evaluate from the local Parquet snapshot only
-- do not re-query the live DB for each run
-- only refresh the snapshot when explicitly starting a new experiment campaign
-
-## Keep the Evaluation Fixed
+## Evaluation Rules
 
 Use one frozen relevance eval split for the entire loop.
 
 Requirements:
 
 - same train / eval split across all runs
-- same random seed across all runs
-- same class-balancing logic across all runs unless the explicit experiment is about
-  class-balancing
+- same random seed across all runs unless the explicit experiment is about seed
 - same metric computation across all runs
+- compare only on the frozen snapshot
 
 Do not let the loop optimize against a moving target.
 
@@ -209,24 +182,59 @@ Rules:
 These rules override any default branch-creation behavior in the autoresearch
 tooling.
 
+## Training Data Policy
+
+Default training regime for this loop:
+
+- use the full frozen training split
+- do not downsample to a 50/50 balanced subset unless the explicit experiment is
+  about balance mode
+- keep the existing excellent-article weighting behavior
+
+The recent experiment history strongly suggests that training on the full frozen
+training split is better than the old balanced-downsample regime for this task.
+
 ## Preferred Implementation Shape
 
 Do not start by hacking production files back and forth.
 
 Preferred path:
 
-1. build a dedicated relevance experiment harness
-2. point it at the frozen snapshot
+1. keep using the dedicated relevance experiment harness
+2. keep using the frozen snapshot
 3. parameterize:
    - model name
    - max length
    - text preparation mode
+   - classifier type
+   - train balance mode
    - output / artifact path
    - seed
+   - embedding-specific knobs if needed
 4. make `autoresearch.sh` call that harness and print structured metrics
 
 Production files should remain mostly untouched during exploration.
 Only backport the winning idea after the loop has produced a clear result.
+
+## Embedding Model Rules
+
+Embedding models are now first-class candidates.
+
+Allowed embedding-specific knobs:
+
+- pooling mode, such as `mean` or `cls`
+- optional text prefixing when recommended by the model card
+- optional layer norm before final L2 normalization
+- optional embedding-dimension truncation when recommended by the model family
+
+Rules:
+
+- If a model card recommends a specific pooling mode or prefix for classification,
+  the loop may use it.
+- Every embedding-specific knob must be logged in the run name and results so the
+  comparison remains interpretable.
+- After any harness change that could affect embeddings, rerun the current kept
+  control before judging new models.
 
 ## Files to Read First
 
@@ -234,27 +242,26 @@ Read these files fully before changing anything:
 
 - `program.md`
 - `autoresearch.md`
+- `autoresearch.ideas.md`
+- `autoresearch.sh`
+- `feedoscope/relevance_experiments/harness.py`
+- `feedoscope/relevance_experiments/export_snapshot.py`
 - `feedoscope/llm_learn.py`
 - `feedoscope/llm_infer.py`
 - `feedoscope/utils.py`
 - `feedoscope/eval_models.py`
 - `feedoscope/data_registry/data_registry.py`
-- `feedoscope/data_registry/sql/get_read_articles_training.sql`
-- `feedoscope/data_registry/sql/get_published_articles.sql`
-- `plans/eval-job-plan.md`
-- `plans/ettin-migration-plan.md`
 
 ## Files In Scope
 
 Preferred in-scope surface:
 
-- new experiment-only harness files
-- new snapshot / export helpers
-- new experiment text-prep helpers
 - `program.md`
 - `autoresearch.md`
-- `autoresearch.sh`
 - `autoresearch.ideas.md`
+- `autoresearch.sh`
+- `feedoscope/relevance_experiments/harness.py`
+- new experiment-only helpers if needed
 - local experiment artifact / log files
 
 Avoid modifying these during exploration unless absolutely necessary:
@@ -264,46 +271,61 @@ Avoid modifying these during exploration unless absolutely necessary:
 - deployment manifests
 - urgency pipeline files
 
-## Required Run Order
+## Required Next Run Order
 
-Step 0:
+This is the required sequence for the next loop segment:
 
-- export the experiment dataset from PostgreSQL into local Parquet
-- define and freeze the eval split
-- record snapshot metadata
+1. Control rerun of the current EmbeddingGemma winner after any harness changes.
+2. `Alibaba-NLP/gte-base-en-v1.5 @ 2048`, `single_blob`, embedding + linear head,
+   full train split.
+3. `Alibaba-NLP/gte-large-en-v1.5 @ 2048`, `single_blob`, embedding + linear head,
+   full train split.
+4. `nomic-ai/nomic-embed-text-v1.5 @ 2048`, `single_blob`, embedding + linear head,
+   full train split.
+5. `Snowflake/snowflake-arctic-embed-m-v2.0 @ 2048`, `single_blob`, embedding +
+   linear head, full train split.
+6. `mixedbread-ai/mxbai-embed-large-v1 @ 512`, `single_blob`, embedding + linear
+   head, full train split.
 
-Then run these four candidates first:
+Do not reorder those first six runs.
 
-1. baseline: `ModernBERT-base @ 512` with the current single-blob text prep
-2. `Ettin-68m @ 1024` with the same single-blob text prep
-3. `Ettin-150m @ 512` with the same single-blob text prep
-4. `ModernBERT-base @ 512` with `title+head+tail` chunking
+## Model-Aware Defaults
 
-Do not reorder these first four runs.
+Use these defaults unless the loop finds a reason to deviate:
 
-## Definition of title+head+tail
+- `google/embeddinggemma-300m`
+  - pooling: `mean`
+  - prefix: none
+  - layer norm: off
+  - truncate dim: off
+- `Alibaba-NLP/gte-base-en-v1.5`
+  - pooling: `cls`
+  - prefix: none
+  - layer norm: off
+  - truncate dim: off
+- `Alibaba-NLP/gte-large-en-v1.5`
+  - pooling: `cls`
+  - prefix: none
+  - layer norm: off
+  - truncate dim: off
+- `nomic-ai/nomic-embed-text-v1.5`
+  - pooling: `mean`
+  - prefix: `classification: `
+  - layer norm: on
+  - truncate dim: `512`
+- `Snowflake/snowflake-arctic-embed-m-v2.0`
+  - pooling: `cls`
+  - prefix: none
+  - layer norm: off
+  - truncate dim: off
+- `mixedbread-ai/mxbai-embed-large-v1`
+  - pooling: `cls`
+  - prefix: none
+  - layer norm: off
+  - truncate dim: off
 
-The `title+head+tail @ 512` experiment must preserve a fair token budget.
-
-Default interpretation:
-
-- clean the title
-- clean the content body
-- construct the input from:
-  - full title
-  - first chunk of the article body
-  - last chunk of the article body
-- do not exceed tokenizer `max_length`
-- keep the method deterministic
-- do not use random chunking
-
-Prefer a simple deterministic budget split:
-
-- always include the title
-- split the remaining budget roughly evenly between head and tail
-- reserve a small buffer for special tokens
-
-Do not make the chunking logic overly clever in the first version.
+If the loop wants to compare a generic mean-pooling harness against a model-aware
+setting, treat that as a separate explicit experiment.
 
 ## How to Run One Experiment
 
@@ -330,17 +352,6 @@ It must print at least:
 - `METRIC train_seconds=<value>`
 - `METRIC total_seconds=<value>`
 
-## Baseline Rule
-
-The very first successful run must be the baseline:
-
-- `ModernBERT-base @ 512`
-- frozen snapshot
-- frozen split
-- current single-blob text preparation
-
-Do not skip the baseline.
-
 ## Keep / Discard Policy
 
 - Better `average_precision` on the same frozen eval split means `keep`.
@@ -361,37 +372,42 @@ Every run should record:
 - current branch name
 - snapshot id or snapshot path
 - model name
+- classifier type
 - max length
 - text-prep mode
+- train balance mode
 - primary metric
 - secondary metrics
 - peak VRAM
 - keep / discard / crash status
 - short description
 - what was learned
+- embedding-specific knobs if used
 
 The log must make it possible for a fresh agent to resume without re-reading the
 whole repo.
 
-## Experiment Strategy After the First Four
+## Experiment Strategy After the Required Queue
 
-After the four required runs, continue with the most justified next moves.
+After the required next-run queue, continue with the most justified moves.
 
 Good next moves:
 
-- combine the best encoder with `title+head+tail`
-- if `Ettin-68m @ 1024` wins, test whether chunking still helps
-- if chunking wins strongly at 512, test chunking with `Ettin-150m @ 512`
-- try memory-saving implementation changes only if they enable longer context while
-  preserving the evaluation protocol
+- compare one generic embedding configuration against one model-aware configuration
+  for a promising family
+- tune `C` locally around a promising new embedding winner
+- compare `single_blob` versus `title_head` only if a new model is close to the
+  control
+- revisit transformer models only if a specific full-data hypothesis remains open
 
 Bad next moves:
 
-- changing many things at once before the first four runs are isolated
+- changing many things at once before the required queue is complete
 - touching urgency
-- swapping to decoder-only models for this classification task
 - re-querying the DB every run
 - rewriting the evaluation target mid-loop
+- assuming a new embedding model is worse when it may simply need its recommended
+  pooling / prefix
 
 ## Resume Rules
 
@@ -401,20 +417,20 @@ When resuming with no context:
 2. verify it is not `main` or `master`
 3. read this file
 4. read `autoresearch.md`
-5. read experiment logs
-6. identify the best kept run so far
-7. continue from the next most justified experiment
-8. do not repeat dead ends unless there is a specific new reason
+5. read `autoresearch.ideas.md`
+6. read experiment logs
+7. identify the best kept run so far
+8. continue from the next most justified experiment
+9. do not repeat dead ends unless there is a specific new reason
 
 ## Never Stop Rule
 
 This is an autonomous loop.
 
-After setup and baseline, continue until interrupted.
+After setup and the required queue, continue until interrupted.
 
 Do not ask whether to continue.
-Do not stop after the first four runs.
-Do not stop after finding one improvement.
+Do not stop after one improvement.
 Keep exploring justified combinations and adjacent ideas until explicitly stopped or
 until a configured `maxIterations` limit is reached.
 
@@ -422,8 +438,10 @@ until a configured `maxIterations` limit is reached.
 
 The loop is successful when it can answer:
 
-- which of the four required candidates won
-- whether larger context helped more than encoder choice
-- whether `title+head+tail` helped more than model swaps
+- whether the current EmbeddingGemma winner survives a control rerun after harness
+  changes
+- whether any other embedding family beats that control on the frozen snapshot
+- whether model-aware pooling / prefixing matters materially for the best candidate
+- whether full-data training should remain the default regime
 - what the best relevance configuration is on the frozen snapshot
 - what the measured tradeoffs are in AP, ROC AUC, log loss, VRAM, and runtime

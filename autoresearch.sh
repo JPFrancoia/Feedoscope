@@ -11,9 +11,13 @@ BATCH_SIZE="${BATCH_SIZE:-4}"
 GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-4}"
 LEARNING_RATE="${LEARNING_RATE:-2e-5}"
 LINEAR_C="${LINEAR_C:-1.0}"
-TRAIN_BALANCE_MODE="${TRAIN_BALANCE_MODE:-balanced}"
+TRAIN_BALANCE_MODE="${TRAIN_BALANCE_MODE:-full}"
+EMBED_POOLING="${EMBED_POOLING:-mean}"
+EMBED_PREFIX_MODE="${EMBED_PREFIX_MODE:-none}"
+EMBED_LAYER_NORM="${EMBED_LAYER_NORM:-0}"
+EMBED_TRUNCATE_DIM="${EMBED_TRUNCATE_DIM:-0}"
 EPOCHS="${EPOCHS:-2}"
-RUN_NAME="${RUN_NAME:-$(printf '%s__%s__%s__%s__bs%s__%s' "${MODEL_NAME//\//-}" "${MAX_LENGTH}" "${TEXT_PREP_MODE}" "${CLASSIFIER_TYPE}" "${BATCH_SIZE}" "${TRAIN_BALANCE_MODE}")}"
+RUN_NAME="${RUN_NAME:-$(printf '%s__%s__%s__%s__bs%s__%s__c%s__pool%s__prefix%s__ln%s__dim%s' "${MODEL_NAME//\//-}" "${MAX_LENGTH}" "${TEXT_PREP_MODE}" "${CLASSIFIER_TYPE}" "${BATCH_SIZE}" "${TRAIN_BALANCE_MODE}" "${LINEAR_C}" "${EMBED_POOLING}" "${EMBED_PREFIX_MODE}" "${EMBED_LAYER_NORM}" "${EMBED_TRUNCATE_DIM}")}"
 OUTPUT_DIR="${OUTPUT_DIR:-artifacts/relevance_autoresearch/runs/${RUN_NAME}}"
 
 if [[ ! -d "${SNAPSHOT_DIR}" ]]; then
@@ -35,6 +39,10 @@ if [[ "${CLASSIFIER_TYPE}" == "embedding_linear" ]]; then
   BATCH_SIZE="${BATCH_SIZE}" \
   LINEAR_C="${LINEAR_C}" \
   TRAIN_BALANCE_MODE="${TRAIN_BALANCE_MODE}" \
+  EMBED_POOLING="${EMBED_POOLING}" \
+  EMBED_PREFIX_MODE="${EMBED_PREFIX_MODE}" \
+  EMBED_LAYER_NORM="${EMBED_LAYER_NORM}" \
+  EMBED_TRUNCATE_DIM="${EMBED_TRUNCATE_DIM}" \
   uv run python - <<'PY'
 import json
 import logging
@@ -86,6 +94,14 @@ def prepare_title_head(title: str, content: str, max_length: int, tokenizer) -> 
     return sep.join(part for part in parts if part)
 
 
+def resolve_text_prefix(prefix_mode: str) -> str:
+    if prefix_mode == 'none':
+        return ''
+    if prefix_mode == 'classification':
+        return 'classification: '
+    raise ValueError(f'Unsupported EMBED_PREFIX_MODE: {prefix_mode}')
+
+
 def load_snapshot(snapshot_dir: Path):
     train_df = pd.read_parquet(snapshot_dir / 'train.parquet')
     eval_df = pd.read_parquet(snapshot_dir / 'eval.parquet')
@@ -107,15 +123,28 @@ def apply_training_balance(train_df: pd.DataFrame) -> pd.DataFrame:
     return pd.concat([balanced_good, balanced_bad], ignore_index=True).sort_values('article_id')
 
 
-def build_texts(df: pd.DataFrame, tokenizer, max_length: int, text_prep_mode: str) -> list[str]:
+def build_texts(
+    df: pd.DataFrame,
+    tokenizer,
+    max_length: int,
+    text_prep_mode: str,
+    prefix_mode: str,
+) -> list[str]:
     texts = []
+    prefix = resolve_text_prefix(prefix_mode)
     for row in df.to_dict(orient='records'):
         if text_prep_mode == 'single_blob':
-            texts.append(prepare_single_blob(row['title'], row['content']))
+            text = prepare_single_blob(row['title'], row['content'])
         elif text_prep_mode == 'title_head':
-            texts.append(prepare_title_head(row['title'], row['content'], max_length=max_length, tokenizer=tokenizer))
+            text = prepare_title_head(
+                row['title'],
+                row['content'],
+                max_length=max_length,
+                tokenizer=tokenizer,
+            )
         else:
             raise ValueError(f'Unsupported text prep mode for embedding harness: {text_prep_mode}')
+        texts.append(prefix + text)
     return texts
 
 
@@ -126,7 +155,29 @@ def mean_pool(last_hidden_state: torch.Tensor, attention_mask: torch.Tensor) -> 
     return summed / counts
 
 
-def encode_texts(model, tokenizer, texts: list[str], max_length: int, batch_size: int, device: torch.device) -> np.ndarray:
+def pool_hidden_states(outputs, attention_mask: torch.Tensor, pooling_mode: str) -> torch.Tensor:
+    if pooling_mode == 'mean':
+        return mean_pool(outputs.last_hidden_state, attention_mask)
+    if pooling_mode == 'cls':
+        return outputs.last_hidden_state[:, 0]
+    if pooling_mode == 'pooler':
+        if hasattr(outputs, 'pooler_output') and outputs.pooler_output is not None:
+            return outputs.pooler_output
+        raise RuntimeError('pooler_output requested but missing from model output')
+    raise ValueError(f'Unsupported EMBED_POOLING: {pooling_mode}')
+
+
+def encode_texts(
+    model,
+    tokenizer,
+    texts: list[str],
+    max_length: int,
+    batch_size: int,
+    device: torch.device,
+    pooling_mode: str,
+    apply_layer_norm: bool,
+    truncate_dim: int,
+) -> np.ndarray:
     embeddings = []
     model.eval()
     with torch.no_grad():
@@ -135,12 +186,16 @@ def encode_texts(model, tokenizer, texts: list[str], max_length: int, batch_size
             inputs = tokenizer(batch, padding=True, truncation=True, max_length=max_length, return_tensors='pt')
             inputs = {k: v.to(device) for k, v in inputs.items()}
             outputs = model(**inputs)
-            if hasattr(outputs, 'last_hidden_state'):
-                pooled = mean_pool(outputs.last_hidden_state, inputs['attention_mask'])
-            elif hasattr(outputs, 'pooler_output'):
-                pooled = outputs.pooler_output
-            else:
-                raise RuntimeError('Model output has neither last_hidden_state nor pooler_output')
+            if not hasattr(outputs, 'last_hidden_state'):
+                raise RuntimeError('Embedding harness expects last_hidden_state in model output')
+            pooled = pool_hidden_states(outputs, inputs['attention_mask'], pooling_mode)
+            if apply_layer_norm:
+                pooled = torch.nn.functional.layer_norm(
+                    pooled,
+                    normalized_shape=(pooled.shape[1],),
+                )
+            if truncate_dim > 0 and truncate_dim < pooled.shape[1]:
+                pooled = pooled[:, :truncate_dim]
             pooled = torch.nn.functional.normalize(pooled, p=2, dim=1)
             embeddings.append(pooled.cpu().numpy())
     return np.concatenate(embeddings, axis=0)
@@ -170,6 +225,10 @@ def main() -> None:
     seed = int(os.environ['SEED'])
     batch_size = int(os.environ['BATCH_SIZE'])
     linear_c = float(os.environ['LINEAR_C'])
+    embed_pooling = os.environ['EMBED_POOLING']
+    embed_prefix_mode = os.environ['EMBED_PREFIX_MODE']
+    embed_layer_norm = os.environ['EMBED_LAYER_NORM'] == '1'
+    embed_truncate_dim = int(os.environ['EMBED_TRUNCATE_DIM'])
 
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -190,8 +249,20 @@ def main() -> None:
     model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
     model.to(device)
 
-    train_texts = build_texts(balanced_train_df, tokenizer=tokenizer, max_length=max_length, text_prep_mode=text_prep_mode)
-    eval_texts = build_texts(eval_df, tokenizer=tokenizer, max_length=max_length, text_prep_mode=text_prep_mode)
+    train_texts = build_texts(
+        balanced_train_df,
+        tokenizer=tokenizer,
+        max_length=max_length,
+        text_prep_mode=text_prep_mode,
+        prefix_mode=embed_prefix_mode,
+    )
+    eval_texts = build_texts(
+        eval_df,
+        tokenizer=tokenizer,
+        max_length=max_length,
+        text_prep_mode=text_prep_mode,
+        prefix_mode=embed_prefix_mode,
+    )
     train_labels = balanced_train_df['label'].to_numpy()
     eval_labels = eval_df['label'].to_numpy()
     sample_weights = np.where(
@@ -205,8 +276,28 @@ def main() -> None:
         torch.cuda.reset_peak_memory_stats()
 
     train_start = time.perf_counter()
-    train_embeddings = encode_texts(model, tokenizer, train_texts, max_length, batch_size, device)
-    eval_embeddings = encode_texts(model, tokenizer, eval_texts, max_length, batch_size, device)
+    train_embeddings = encode_texts(
+        model,
+        tokenizer,
+        train_texts,
+        max_length,
+        batch_size,
+        device,
+        embed_pooling,
+        embed_layer_norm,
+        embed_truncate_dim,
+    )
+    eval_embeddings = encode_texts(
+        model,
+        tokenizer,
+        eval_texts,
+        max_length,
+        batch_size,
+        device,
+        embed_pooling,
+        embed_layer_norm,
+        embed_truncate_dim,
+    )
     clf = LogisticRegression(max_iter=4000, C=linear_c, random_state=seed)
     clf.fit(train_embeddings, train_labels, sample_weight=sample_weights)
     train_seconds = time.perf_counter() - train_start
@@ -231,6 +322,10 @@ def main() -> None:
         'classifier_type': 'embedding_linear',
         'linear_c': linear_c,
         'train_balance_mode': train_balance_mode,
+        'embed_pooling': embed_pooling,
+        'embed_prefix_mode': embed_prefix_mode,
+        'embed_layer_norm': embed_layer_norm,
+        'embed_truncate_dim': embed_truncate_dim,
     }
     (output_dir / 'results.json').write_text(json.dumps(results, indent=2) + '\n')
     for metric_name in ['average_precision', 'roc_auc', 'log_loss', 'accuracy', 'precision', 'recall', 'f1', 'peak_vram_gb', 'train_seconds', 'total_seconds']:

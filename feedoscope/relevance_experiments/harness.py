@@ -42,7 +42,7 @@ DEFAULT_LEARNING_RATE = 2e-5
 DEFAULT_EPOCHS = 2
 DEFAULT_BATCH_SIZE = 4
 DEFAULT_GRADIENT_ACCUMULATION_STEPS = 4
-DEFAULT_TRAIN_BALANCE_MODE = "balanced"
+DEFAULT_TRAIN_BALANCE_MODE = "full"
 DEFAULT_EXCELLENT_WEIGHT = config.EXCELLENT_WEIGHT
 
 
@@ -280,7 +280,7 @@ def main() -> None:
         f"Loaded snapshot {metadata['snapshot_id']} with {len(train_df)} train rows and {len(eval_df)} eval rows"
     )
     logger.info(
-        f"Balanced training set has {len(balanced_train_df.loc[balanced_train_df['label'] == 1])} good and {len(balanced_train_df.loc[balanced_train_df['label'] == 0])} bad rows"
+        f"Training set has {len(balanced_train_df.loc[balanced_train_df['label'] == 1])} good and {len(balanced_train_df.loc[balanced_train_df['label'] == 0])} bad rows"
     )
 
     total_start = time.perf_counter()

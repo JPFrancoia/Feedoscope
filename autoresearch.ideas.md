@@ -1,4 +1,8 @@
-- Stabilize training noise before trusting sub-0.01 AP deltas: try fully deterministic DataLoader/Trainer settings, or compare configs by the mean of 3 repeated runs on the same frozen split instead of a single draw.
-- Sweep simple text-prep variants around the current winner without adding much complexity: `title_only`, `title + first N% of body`, and a 75/25 head/tail split to check whether the tail hurt because it consumed too much of the budget.
-- If the noise problem remains, compare configurations with a larger frozen eval holdout or a second frozen snapshot/seed to reduce overfitting to one split while keeping DB access local-only.
-- Revisit `title_head_tail_75_25` for Ettin-68m @ 1024: it nearly matched the best AP while materially improving log loss, so a confirmatory rerun or neighboring 80/20 split could still be worthwhile.
+- Control rerun: rerun the kept `google/embeddinggemma-300m @ 2048`, `single_blob`, `embedding_linear`, `TRAIN_BALANCE_MODE=full`, `C=4.0` configuration after the harness changes. If it no longer reproduces, stop and investigate before trusting new comparisons.
+- `Alibaba-NLP/gte-base-en-v1.5 @ 2048`: try `single_blob`, `embedding_linear`, `TRAIN_BALANCE_MODE=full`, `EMBED_POOLING=cls`. This is the cheapest long-context GTE candidate and a strong next comparison against the current control.
+- `Alibaba-NLP/gte-large-en-v1.5 @ 2048`: same setup as GTE base but larger. Only meaningful after the base run because it costs more and should beat base to justify itself.
+- `nomic-ai/nomic-embed-text-v1.5 @ 2048`: try `single_blob`, `embedding_linear`, `TRAIN_BALANCE_MODE=full`, `EMBED_POOLING=mean`, `EMBED_PREFIX_MODE=classification`, `EMBED_LAYER_NORM=1`, `EMBED_TRUNCATE_DIM=512`. This is the most model-aware candidate in the next queue.
+- `Snowflake/snowflake-arctic-embed-m-v2.0 @ 2048`: try `single_blob`, `embedding_linear`, `TRAIN_BALANCE_MODE=full`, `EMBED_POOLING=cls`. Good long-context comparison against the GTE family.
+- `mixedbread-ai/mxbai-embed-large-v1 @ 512`: try `single_blob`, `embedding_linear`, `TRAIN_BALANCE_MODE=full`, `EMBED_POOLING=cls`. Shorter context than the long-context families, but still a strong embedding baseline.
+- If a new family comes close to the EmbeddingGemma control, only then sweep nearby `LINEAR_C` values. Do not start with a large hyperparameter sweep.
+- If a model underperforms badly with generic settings, check whether the model card expects `cls` pooling or a task prefix before discarding the family entirely.

@@ -4,18 +4,28 @@ Read `program.md` first. It is the authoritative full brief for this loop.
 
 ## Objective
 
-Improve relevance evaluation on a fixed frozen dataset snapshot.
+Improve relevance evaluation on the existing frozen dataset snapshot.
 
-This loop must optimize relevance only.
+This session is resumed and already bootstrapped. The snapshot, harness, and loop
+infrastructure exist.
 
-The first four required candidates are:
+## Current Best To Beat
 
-1. `ModernBERT-base @ 512`
-2. `Ettin-68m @ 1024`
-3. `Ettin-150m @ 512`
-4. `ModernBERT-base @ 512` with `title+head+tail` chunking
+Current kept best:
 
-Run them in that order before branching into combinations.
+- commit: `a27d7c7`
+- model: `google/embeddinggemma-300m`
+- classifier type: `embedding_linear`
+- max length: `2048`
+- text prep: `single_blob`
+- train balance mode: `full`
+- linear head `C`: `4.0`
+- average precision: `0.9840544956495607`
+- roc auc: `0.96794`
+- log loss: `0.21510`
+- peak vram: `1.69 GB`
+
+Treat this as the control baseline.
 
 ## Metrics
 
@@ -25,17 +35,7 @@ Run them in that order before branching into combinations.
 
 ## How to Run
 
-This session is not fully bootstrapped yet.
-
-Initial setup requirements:
-
-1. Export the relevance experiment data from PostgreSQL into local Parquet.
-2. Freeze the eval split and record snapshot metadata.
-3. Create the experiment harness.
-4. Create `autoresearch.sh`.
-5. Run the baseline.
-
-Once bootstrapped, standardize on:
+Standardize on:
 
 `./autoresearch.sh`
 
@@ -46,31 +46,9 @@ Rules for `autoresearch.sh`:
 - print structured `METRIC` lines
 - exit non-zero on crash
 
-## Files In Scope
-
-- new experiment-only harness files
-- snapshot / export helpers
-- experiment text-prep helpers
-- `program.md`
-- `autoresearch.md`
-- `autoresearch.sh`
-- `autoresearch.ideas.md`
-- local experiment artifact / log files
-
-## Off Limits
-
-- any write to PostgreSQL
-- urgency pipeline files unless absolutely required for shared utilities
-- `main` and `master`
-- creating branches
-- switching branches
-- merging any branch
-- pushing or force-pushing
-- deployment manifests unless a winning result is being backported later
-
 ## Constraints
 
-- The current branch is a dedicated experiment branch. Stay on it.
+- Stay on the current dedicated experiment branch.
 - Never create a new branch.
 - Never switch branches.
 - Never commit on `main` or `master`.
@@ -79,29 +57,71 @@ Rules for `autoresearch.sh`:
 - Local commits on the current dedicated branch are allowed.
 - Never push.
 - Never force-push.
-- Use the `uv`-managed environment for all Python work.
-- If a dependency is needed for Parquet or the experiment harness, install it with
-  `uv`.
 - Database access is read-only. Allowed SQL is `SELECT` and `EXPLAIN SELECT` only.
-- Freeze the dataset to Parquet before any model experiments.
-- After the snapshot is created, all experiments must use the local snapshot only.
+- Keep using the local frozen snapshot only.
+- Keep using the frozen eval split only.
+- Use the `uv`-managed environment for all Python work.
 - The machine has one 12 GB GPU. OOM is a crash.
-- Keep the evaluation target fixed across runs.
-- Do not reorder the first four required runs.
+- Default to `TRAIN_BALANCE_MODE=full` unless the explicit experiment is about
+  balance mode.
+
+## What Has Been Learned So Far
+
+- The loop is no longer in bootstrap mode; the snapshot, harness, and append-only log
+  already exist.
+- Full-data training on the frozen train split outperformed the old balanced
+  downsampling regime.
+- Embedding models with a logistic-regression head have beaten the fine-tuned
+  transformer baselines on this snapshot.
+- `BAAI/bge-m3` was the strongest open embedding family before EmbeddingGemma access
+  was granted.
+- After access was granted, `google/embeddinggemma-300m @ 2048` became the best run.
+
+## Required Next Run Order
+
+Run these next, in this order:
+
+1. control rerun of the current EmbeddingGemma winner after the harness changes
+2. `Alibaba-NLP/gte-base-en-v1.5 @ 2048`, `single_blob`, embedding + linear head,
+   full train split
+3. `Alibaba-NLP/gte-large-en-v1.5 @ 2048`, `single_blob`, embedding + linear head,
+   full train split
+4. `nomic-ai/nomic-embed-text-v1.5 @ 2048`, `single_blob`, embedding + linear head,
+   full train split
+5. `Snowflake/snowflake-arctic-embed-m-v2.0 @ 2048`, `single_blob`, embedding +
+   linear head, full train split
+6. `mixedbread-ai/mxbai-embed-large-v1 @ 512`, `single_blob`, embedding + linear
+   head, full train split
+
+Do not reorder these first six runs.
+
+## Model-Aware Defaults
+
+- `google/embeddinggemma-300m`: `mean` pooling, no prefix, no layer norm, no dim
+  truncation
+- `Alibaba-NLP/gte-base-en-v1.5`: `cls` pooling, no prefix
+- `Alibaba-NLP/gte-large-en-v1.5`: `cls` pooling, no prefix
+- `nomic-ai/nomic-embed-text-v1.5`: `mean` pooling, `classification: ` prefix,
+  layer norm on, truncate dim to `512`
+- `Snowflake/snowflake-arctic-embed-m-v2.0`: `cls` pooling, no prefix
+- `mixedbread-ai/mxbai-embed-large-v1`: `cls` pooling, no prefix
+
+Log every embedding-specific knob in the run output.
 
 ## What's Been Tried
 
-No experiments have been run yet.
+Keep this section updated as the loop progresses.
 
-Required initial sequence:
+Current condensed history:
 
-1. create the local Parquet snapshot
-2. freeze the eval split
-3. implement the experiment harness
-4. implement `autoresearch.sh`
-5. run the four required candidates in order
+- best fine-tuned transformer before embeddings: Ettin-68m full-data run below the
+  best embedding regime
+- `BAAI/bge-m3 @ 2048` with embedding + logistic-regression head became the best open
+  embedding family tried so far
+- `google/embeddinggemma-300m @ 2048` overtook `bge-m3` once model access was
+  granted
 
-Keep this section updated with:
+Keep updating this file with:
 
 - best kept run so far
 - dead ends
