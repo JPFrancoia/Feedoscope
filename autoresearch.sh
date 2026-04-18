@@ -16,8 +16,9 @@ EMBED_POOLING="${EMBED_POOLING:-mean}"
 EMBED_PREFIX_MODE="${EMBED_PREFIX_MODE:-none}"
 EMBED_LAYER_NORM="${EMBED_LAYER_NORM:-0}"
 EMBED_TRUNCATE_DIM="${EMBED_TRUNCATE_DIM:-0}"
+EMBED_ATTN_IMPLEMENTATION="${EMBED_ATTN_IMPLEMENTATION:-}"
 EPOCHS="${EPOCHS:-2}"
-RUN_NAME="${RUN_NAME:-$(printf '%s__%s__%s__%s__bs%s__%s__c%s__pool%s__prefix%s__ln%s__dim%s' "${MODEL_NAME//\//-}" "${MAX_LENGTH}" "${TEXT_PREP_MODE}" "${CLASSIFIER_TYPE}" "${BATCH_SIZE}" "${TRAIN_BALANCE_MODE}" "${LINEAR_C}" "${EMBED_POOLING}" "${EMBED_PREFIX_MODE}" "${EMBED_LAYER_NORM}" "${EMBED_TRUNCATE_DIM}")}"
+RUN_NAME="${RUN_NAME:-$(printf '%s__%s__%s__%s__bs%s__%s__c%s__pool%s__prefix%s__ln%s__dim%s__attn%s' "${MODEL_NAME//\//-}" "${MAX_LENGTH}" "${TEXT_PREP_MODE}" "${CLASSIFIER_TYPE}" "${BATCH_SIZE}" "${TRAIN_BALANCE_MODE}" "${LINEAR_C}" "${EMBED_POOLING}" "${EMBED_PREFIX_MODE}" "${EMBED_LAYER_NORM}" "${EMBED_TRUNCATE_DIM}" "${EMBED_ATTN_IMPLEMENTATION:-default}")}"
 OUTPUT_DIR="${OUTPUT_DIR:-artifacts/relevance_autoresearch/runs/${RUN_NAME}}"
 
 if [[ ! -d "${SNAPSHOT_DIR}" ]]; then
@@ -43,6 +44,7 @@ if [[ "${CLASSIFIER_TYPE}" == "embedding_linear" ]]; then
   EMBED_PREFIX_MODE="${EMBED_PREFIX_MODE}" \
   EMBED_LAYER_NORM="${EMBED_LAYER_NORM}" \
   EMBED_TRUNCATE_DIM="${EMBED_TRUNCATE_DIM}" \
+  EMBED_ATTN_IMPLEMENTATION="${EMBED_ATTN_IMPLEMENTATION}" \
   uv run python - <<'PY'
 import json
 import logging
@@ -229,6 +231,7 @@ def main() -> None:
     embed_prefix_mode = os.environ['EMBED_PREFIX_MODE']
     embed_layer_norm = os.environ['EMBED_LAYER_NORM'] == '1'
     embed_truncate_dim = int(os.environ['EMBED_TRUNCATE_DIM'])
+    embed_attn_implementation = os.environ.get('EMBED_ATTN_IMPLEMENTATION') or None
 
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -246,7 +249,10 @@ def main() -> None:
 
     total_start = time.perf_counter()
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
+    model_kwargs = {'trust_remote_code': True}
+    if embed_attn_implementation is not None:
+        model_kwargs['attn_implementation'] = embed_attn_implementation
+    model = AutoModel.from_pretrained(model_name, **model_kwargs)
     model.to(device)
 
     train_texts = build_texts(
@@ -326,6 +332,7 @@ def main() -> None:
         'embed_prefix_mode': embed_prefix_mode,
         'embed_layer_norm': embed_layer_norm,
         'embed_truncate_dim': embed_truncate_dim,
+        'embed_attn_implementation': embed_attn_implementation,
     }
     (output_dir / 'results.json').write_text(json.dumps(results, indent=2) + '\n')
     for metric_name in ['average_precision', 'roc_auc', 'log_loss', 'accuracy', 'precision', 'recall', 'f1', 'peak_vram_gb', 'train_seconds', 'total_seconds']:
