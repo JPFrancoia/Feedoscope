@@ -251,5 +251,6 @@ else
     --batch-size "${BATCH_SIZE}" \
     --gradient-accumulation-steps "${GRADIENT_ACCUMULATION_STEPS}" \
     --learning-rate "${LEARNING_RATE}" \
+    --train-balance-mode "${TRAIN_BALANCE_MODE}" \
     --epochs "${EPOCHS}"
 fi

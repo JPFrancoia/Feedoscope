@@ -42,6 +42,7 @@ DEFAULT_LEARNING_RATE = 2e-5
 DEFAULT_EPOCHS = 2
 DEFAULT_BATCH_SIZE = 4
 DEFAULT_GRADIENT_ACCUMULATION_STEPS = 4
+DEFAULT_TRAIN_BALANCE_MODE = "balanced"
 DEFAULT_EXCELLENT_WEIGHT = config.EXCELLENT_WEIGHT
 
 
@@ -251,6 +252,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_GRADIENT_ACCUMULATION_STEPS,
     )
+    parser.add_argument(
+        "--train-balance-mode",
+        choices=["balanced", "full"],
+        default=DEFAULT_TRAIN_BALANCE_MODE,
+    )
     return parser.parse_args()
 
 
@@ -263,7 +269,12 @@ def main() -> None:
         raise RuntimeError("GPU not available. Exiting")
 
     train_df, eval_df, metadata = load_snapshot(args.snapshot_dir)
-    balanced_train_df = apply_training_balance(train_df)
+    if args.train_balance_mode == "balanced":
+        balanced_train_df = apply_training_balance(train_df)
+    elif args.train_balance_mode == "full":
+        balanced_train_df = train_df.copy().sort_values("article_id")
+    else:
+        raise ValueError(f"Unsupported train balance mode: {args.train_balance_mode}")
 
     logger.info(
         f"Loaded snapshot {metadata['snapshot_id']} with {len(train_df)} train rows and {len(eval_df)} eval rows"
@@ -370,6 +381,7 @@ def main() -> None:
         "max_length": args.max_length,
         "text_prep_mode": args.text_prep_mode,
         "seed": args.seed,
+        "train_balance_mode": args.train_balance_mode,
         "train_rows": int(len(balanced_train_df)),
         "internal_train_rows": int(len(internal_split["train"])),
         "internal_dev_rows": int(len(internal_split["test"])),
