@@ -11,8 +11,9 @@ BATCH_SIZE="${BATCH_SIZE:-4}"
 GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-4}"
 LEARNING_RATE="${LEARNING_RATE:-2e-5}"
 LINEAR_C="${LINEAR_C:-1.0}"
+TRAIN_BALANCE_MODE="${TRAIN_BALANCE_MODE:-balanced}"
 EPOCHS="${EPOCHS:-2}"
-RUN_NAME="${RUN_NAME:-$(printf '%s__%s__%s__%s__bs%s' "${MODEL_NAME//\//-}" "${MAX_LENGTH}" "${TEXT_PREP_MODE}" "${CLASSIFIER_TYPE}" "${BATCH_SIZE}")}"
+RUN_NAME="${RUN_NAME:-$(printf '%s__%s__%s__%s__bs%s__%s' "${MODEL_NAME//\//-}" "${MAX_LENGTH}" "${TEXT_PREP_MODE}" "${CLASSIFIER_TYPE}" "${BATCH_SIZE}" "${TRAIN_BALANCE_MODE}")}"
 OUTPUT_DIR="${OUTPUT_DIR:-artifacts/relevance_autoresearch/runs/${RUN_NAME}}"
 
 if [[ ! -d "${SNAPSHOT_DIR}" ]]; then
@@ -33,6 +34,7 @@ if [[ "${CLASSIFIER_TYPE}" == "embedding_linear" ]]; then
   SEED="${SEED}" \
   BATCH_SIZE="${BATCH_SIZE}" \
   LINEAR_C="${LINEAR_C}" \
+  TRAIN_BALANCE_MODE="${TRAIN_BALANCE_MODE}" \
   uv run python - <<'PY'
 import json
 import logging
@@ -172,7 +174,13 @@ def main() -> None:
     np.random.seed(seed)
     torch.manual_seed(seed)
     train_df, eval_df, metadata = load_snapshot(snapshot_dir)
-    balanced_train_df = apply_training_balance(train_df)
+    train_balance_mode = os.environ['TRAIN_BALANCE_MODE']
+    if train_balance_mode == 'balanced':
+        balanced_train_df = apply_training_balance(train_df)
+    elif train_balance_mode == 'full':
+        balanced_train_df = train_df.copy().sort_values('article_id')
+    else:
+        raise ValueError(f'Unsupported TRAIN_BALANCE_MODE: {train_balance_mode}')
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     if device.type != 'cuda' and not config.ALLOW_TRAINING_WO_GPU:
         raise RuntimeError('GPU not available. Exiting')
@@ -222,6 +230,7 @@ def main() -> None:
         'batch_size': batch_size,
         'classifier_type': 'embedding_linear',
         'linear_c': linear_c,
+        'train_balance_mode': train_balance_mode,
     }
     (output_dir / 'results.json').write_text(json.dumps(results, indent=2) + '\n')
     for metric_name in ['average_precision', 'roc_auc', 'log_loss', 'accuracy', 'precision', 'recall', 'f1', 'peak_vram_gb', 'train_seconds', 'total_seconds']:
