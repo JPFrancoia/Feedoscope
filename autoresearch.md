@@ -13,17 +13,15 @@ infrastructure exist.
 
 Current kept best:
 
-- commit: `a27d7c7`
+- commit: `ea778e6`
 - model: `google/embeddinggemma-300m`
 - classifier type: `embedding_linear`
 - max length: `2048`
-- text prep: `single_blob`
+- text prep: `title_head`
 - train balance mode: `full`
-- linear head `C`: `4.0`
-- average precision: `0.9840544956495607`
-- roc auc: `0.96794`
-- log loss: `0.21510`
-- peak vram: `1.69 GB`
+- linear head `C`: `5.0`
+- average precision: `0.984098480367228`
+- log loss: `0.21130`
 
 Treat this as the control baseline.
 
@@ -52,9 +50,6 @@ Rules for `autoresearch.sh`:
 - Never create a new branch.
 - Never switch branches.
 - Never commit on `main` or `master`.
-- If the current branch is `main` or `master`, stop and ask the human to restart
-  from a dedicated branch.
-- Local commits on the current dedicated branch are allowed.
 - Never push.
 - Never force-push.
 - Database access is read-only. Allowed SQL is `SELECT` and `EXPLAIN SELECT` only.
@@ -73,38 +68,34 @@ Rules for `autoresearch.sh`:
   downsampling regime.
 - Embedding models with a logistic-regression head have beaten the fine-tuned
   transformer baselines on this snapshot.
-- `BAAI/bge-m3` was the strongest open embedding family before EmbeddingGemma access
-  was granted.
-- After access was granted, `google/embeddinggemma-300m @ 2048` became the best run.
+- `google/embeddinggemma-300m @ 2048` overtook all prior open families, then improved
+  again with `title_head` and `C=5.0`.
+- Real-world validation suggests the current master path is still strong, so the next
+  loop should be narrow and targeted.
 
 ## Required Next Run Order
 
 Run these next, in this order:
 
 1. control rerun of the current EmbeddingGemma winner after the harness changes
-2. `Alibaba-NLP/gte-base-en-v1.5 @ 2048`, `single_blob`, embedding + linear head,
-   full train split
-3. `Alibaba-NLP/gte-large-en-v1.5 @ 2048`, `single_blob`, embedding + linear head,
-   full train split
-4. `nomic-ai/nomic-embed-text-v1.5 @ 2048`, `single_blob`, embedding + linear head,
-   full train split
-5. `Snowflake/snowflake-arctic-embed-m-v2.0 @ 2048`, `single_blob`, embedding +
-   linear head, full train split
-6. `mixedbread-ai/mxbai-embed-large-v1 @ 512`, `single_blob`, embedding + linear
-   head, full train split
+2. `google/embeddinggemma-300m @ 2048`, `title_head`, `EMBED_PROMPT_MODE=classification`
+3. `google/embeddinggemma-300m @ 2048`, `title_head`, `EMBED_PROMPT_MODE=document`
+4. `Alibaba-NLP/gte-large-en-v1.5 @ 2048`, `title_head`, dense embedding + linear head
+5. `Snowflake/snowflake-arctic-embed-l-v2.0 @ 2048`, `title_head`, dense embedding +
+   linear head
+6. `BAAI/bge-m3 @ 2048`, `title_head`, `EMBED_FEATURE_MODE=hybrid`
+7. `BAAI/bge-m3 @ 2048`, `title_head`, `EMBED_FEATURE_MODE=sparse`
 
-Do not reorder these first six runs.
+Do not reorder these first seven runs.
 
 ## Model-Aware Defaults
 
-- `google/embeddinggemma-300m`: `mean` pooling, no prefix, no layer norm, no dim
-  truncation
-- `Alibaba-NLP/gte-base-en-v1.5`: `cls` pooling, no prefix
-- `Alibaba-NLP/gte-large-en-v1.5`: `cls` pooling, no prefix
-- `nomic-ai/nomic-embed-text-v1.5`: `mean` pooling, `classification: ` prefix,
-  layer norm on, truncate dim to `512`
-- `Snowflake/snowflake-arctic-embed-m-v2.0`: `cls` pooling, no prefix
-- `mixedbread-ai/mxbai-embed-large-v1`: `cls` pooling, no prefix
+- `google/embeddinggemma-300m`: `mean` pooling, prompt modes `none`, then
+  `classification`, then `document`
+- `Alibaba-NLP/gte-large-en-v1.5`: `cls` pooling, no prompt mode initially
+- `Snowflake/snowflake-arctic-embed-l-v2.0`: `cls` pooling, no prompt mode initially
+- `BAAI/bge-m3`: dense control uses `mean`; hybrid and sparse runs use hashed lexical
+  features with `EMBED_SPARSE_HASH_DIM=8192`
 
 Log every embedding-specific knob in the run output.
 
@@ -116,10 +107,10 @@ Current condensed history:
 
 - best fine-tuned transformer before embeddings: Ettin-68m full-data run below the
   best embedding regime
-- `BAAI/bge-m3 @ 2048` with embedding + logistic-regression head became the best open
-  embedding family tried so far
-- `google/embeddinggemma-300m @ 2048` overtook `bge-m3` once model access was
-  granted
+- `BAAI/bge-m3 @ 2048` with dense embeddings and a logistic-regression head became
+  the best open embedding family tried so far
+- `google/embeddinggemma-300m @ 2048` overtook `bge-m3`, then improved again with
+  `title_head` and `C=5.0`
 
 Keep updating this file with:
 

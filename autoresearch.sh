@@ -14,10 +14,13 @@ LINEAR_C="${LINEAR_C:-1.0}"
 TRAIN_BALANCE_MODE="${TRAIN_BALANCE_MODE:-full}"
 EMBED_POOLING="${EMBED_POOLING:-mean}"
 EMBED_PREFIX_MODE="${EMBED_PREFIX_MODE:-none}"
+EMBED_PROMPT_MODE="${EMBED_PROMPT_MODE:-none}"
+EMBED_FEATURE_MODE="${EMBED_FEATURE_MODE:-dense}"
+EMBED_SPARSE_HASH_DIM="${EMBED_SPARSE_HASH_DIM:-8192}"
 EMBED_LAYER_NORM="${EMBED_LAYER_NORM:-0}"
 EMBED_TRUNCATE_DIM="${EMBED_TRUNCATE_DIM:-0}"
 EPOCHS="${EPOCHS:-2}"
-RUN_NAME="${RUN_NAME:-$(printf '%s__%s__%s__%s__bs%s__%s__c%s__pool%s__prefix%s__ln%s__dim%s' "${MODEL_NAME//\//-}" "${MAX_LENGTH}" "${TEXT_PREP_MODE}" "${CLASSIFIER_TYPE}" "${BATCH_SIZE}" "${TRAIN_BALANCE_MODE}" "${LINEAR_C}" "${EMBED_POOLING}" "${EMBED_PREFIX_MODE}" "${EMBED_LAYER_NORM}" "${EMBED_TRUNCATE_DIM}")}"
+RUN_NAME="${RUN_NAME:-$(printf '%s__%s__%s__%s__bs%s__%s__c%s__pool%s__prefix%s__prompt%s__feat%s__hash%s__ln%s__dim%s' "${MODEL_NAME//\//-}" "${MAX_LENGTH}" "${TEXT_PREP_MODE}" "${CLASSIFIER_TYPE}" "${BATCH_SIZE}" "${TRAIN_BALANCE_MODE}" "${LINEAR_C}" "${EMBED_POOLING}" "${EMBED_PREFIX_MODE}" "${EMBED_PROMPT_MODE}" "${EMBED_FEATURE_MODE}" "${EMBED_SPARSE_HASH_DIM}" "${EMBED_LAYER_NORM}" "${EMBED_TRUNCATE_DIM}")}"
 OUTPUT_DIR="${OUTPUT_DIR:-artifacts/relevance_autoresearch/runs/${RUN_NAME}}"
 
 if [[ ! -d "${SNAPSHOT_DIR}" ]]; then
@@ -41,6 +44,9 @@ if [[ "${CLASSIFIER_TYPE}" == "embedding_linear" ]]; then
   TRAIN_BALANCE_MODE="${TRAIN_BALANCE_MODE}" \
   EMBED_POOLING="${EMBED_POOLING}" \
   EMBED_PREFIX_MODE="${EMBED_PREFIX_MODE}" \
+  EMBED_PROMPT_MODE="${EMBED_PROMPT_MODE}" \
+  EMBED_FEATURE_MODE="${EMBED_FEATURE_MODE}" \
+  EMBED_SPARSE_HASH_DIM="${EMBED_SPARSE_HASH_DIM}" \
   EMBED_LAYER_NORM="${EMBED_LAYER_NORM}" \
   EMBED_TRUNCATE_DIM="${EMBED_TRUNCATE_DIM}" \
   uv run python - <<'PY'
@@ -54,6 +60,8 @@ from pathlib import Path
 from cleantext import clean
 import numpy as np
 import pandas as pd
+from scipy import sparse as sp
+from sklearn.feature_extraction import FeatureHasher
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, average_precision_score, f1_score, log_loss, precision_score, recall_score, roc_auc_score
 import torch
@@ -94,12 +102,47 @@ def prepare_title_head(title: str, content: str, max_length: int, tokenizer) -> 
     return sep.join(part for part in parts if part)
 
 
+def prepare_body_head(content: str, max_length: int, tokenizer) -> str:
+    cleaned_body = _clean_text(strip_html_keep_text(content))
+    body_ids = tokenizer.encode(cleaned_body, add_special_tokens=False)
+    special_buffer = 4
+    body_budget = max(1, max_length - special_buffer)
+    return tokenizer.decode(body_ids[:body_budget], skip_special_tokens=True).strip()
+
+
 def resolve_text_prefix(prefix_mode: str) -> str:
     if prefix_mode == 'none':
         return ''
     if prefix_mode == 'classification':
         return 'classification: '
     raise ValueError(f'Unsupported EMBED_PREFIX_MODE: {prefix_mode}')
+
+
+def apply_prompt_template(
+    row: dict,
+    prepared_text: str,
+    tokenizer,
+    max_length: int,
+    text_prep_mode: str,
+    prompt_mode: str,
+) -> str:
+    if prompt_mode == 'none':
+        return prepared_text
+    if prompt_mode == 'classification':
+        return f'task: classification | query: {prepared_text}'
+    if prompt_mode == 'query':
+        return f'query: {prepared_text}'
+    if prompt_mode == 'document':
+        title = _clean_text(clean_title(row['title'])) or 'none'
+        if text_prep_mode == 'title_head':
+            body = prepare_body_head(row['content'], max_length=max_length, tokenizer=tokenizer)
+        elif text_prep_mode == 'single_blob':
+            body = _clean_text(strip_html_keep_text(row['content']))
+        else:
+            body = prepared_text
+        body = body or prepared_text
+        return f'title: {title} | text: {body}'
+    raise ValueError(f'Unsupported EMBED_PROMPT_MODE: {prompt_mode}')
 
 
 def load_snapshot(snapshot_dir: Path):
@@ -129,14 +172,15 @@ def build_texts(
     max_length: int,
     text_prep_mode: str,
     prefix_mode: str,
+    prompt_mode: str,
 ) -> list[str]:
     texts = []
     prefix = resolve_text_prefix(prefix_mode)
     for row in df.to_dict(orient='records'):
         if text_prep_mode == 'single_blob':
-            text = prepare_single_blob(row['title'], row['content'])
+            prepared_text = prepare_single_blob(row['title'], row['content'])
         elif text_prep_mode == 'title_head':
-            text = prepare_title_head(
+            prepared_text = prepare_title_head(
                 row['title'],
                 row['content'],
                 max_length=max_length,
@@ -144,7 +188,15 @@ def build_texts(
             )
         else:
             raise ValueError(f'Unsupported text prep mode for embedding harness: {text_prep_mode}')
-        texts.append(prefix + text)
+        prompted_text = apply_prompt_template(
+            row,
+            prepared_text,
+            tokenizer=tokenizer,
+            max_length=max_length,
+            text_prep_mode=text_prep_mode,
+            prompt_mode=prompt_mode,
+        )
+        texts.append(prefix + prompted_text)
     return texts
 
 
@@ -167,7 +219,13 @@ def pool_hidden_states(outputs, attention_mask: torch.Tensor, pooling_mode: str)
     raise ValueError(f'Unsupported EMBED_POOLING: {pooling_mode}')
 
 
-def encode_texts(
+def l2_normalize_rows(embeddings: np.ndarray) -> np.ndarray:
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    norms = np.clip(norms, 1e-12, None)
+    return embeddings / norms
+
+
+def encode_dense_texts(
     model,
     tokenizer,
     texts: list[str],
@@ -201,6 +259,58 @@ def encode_texts(
     return np.concatenate(embeddings, axis=0)
 
 
+def load_bge_m3_model(model_name: str):
+    try:
+        from FlagEmbedding import BGEM3FlagModel
+    except ImportError as exc:
+        raise RuntimeError(
+            'BGE-M3 sparse or hybrid features require FlagEmbedding. Install it with `uv add FlagEmbedding`.'
+        ) from exc
+
+    return BGEM3FlagModel(model_name, use_fp16=torch.cuda.is_available())
+
+
+def lexical_weights_to_feature_dicts(lexical_weights) -> list[dict[str, float]]:
+    return [{str(key): float(value) for key, value in weights.items()} for weights in lexical_weights]
+
+
+def encode_bge_m3_features(
+    model_name: str,
+    texts: list[str],
+    batch_size: int,
+    max_length: int,
+    feature_mode: str,
+    sparse_hash_dim: int,
+):
+    bge_model = load_bge_m3_model(model_name)
+    output = bge_model.encode(
+        texts,
+        batch_size=batch_size,
+        max_length=max_length,
+        return_dense=feature_mode != 'sparse',
+        return_sparse=feature_mode != 'dense',
+        return_colbert_vecs=False,
+    )
+
+    if feature_mode == 'dense':
+        return l2_normalize_rows(np.asarray(output['dense_vecs']))
+
+    hasher = FeatureHasher(
+        n_features=sparse_hash_dim,
+        input_type='dict',
+        alternate_sign=False,
+    )
+    sparse_features = hasher.transform(
+        lexical_weights_to_feature_dicts(output['lexical_weights'])
+    ).tocsr()
+
+    if feature_mode == 'sparse':
+        return sparse_features
+
+    dense_features = sp.csr_matrix(l2_normalize_rows(np.asarray(output['dense_vecs'])))
+    return sp.hstack([dense_features, sparse_features], format='csr')
+
+
 def compute_metrics(labels: np.ndarray, probs: np.ndarray) -> dict[str, float]:
     clipped_probs = np.clip(probs, 1e-7, 1 - 1e-7)
     preds = (clipped_probs >= 0.5).astype(int)
@@ -225,29 +335,35 @@ def main() -> None:
     seed = int(os.environ['SEED'])
     batch_size = int(os.environ['BATCH_SIZE'])
     linear_c = float(os.environ['LINEAR_C'])
+    train_balance_mode = os.environ['TRAIN_BALANCE_MODE']
     embed_pooling = os.environ['EMBED_POOLING']
     embed_prefix_mode = os.environ['EMBED_PREFIX_MODE']
+    embed_prompt_mode = os.environ['EMBED_PROMPT_MODE']
+    embed_feature_mode = os.environ['EMBED_FEATURE_MODE']
+    embed_sparse_hash_dim = int(os.environ['EMBED_SPARSE_HASH_DIM'])
     embed_layer_norm = os.environ['EMBED_LAYER_NORM'] == '1'
     embed_truncate_dim = int(os.environ['EMBED_TRUNCATE_DIM'])
 
     np.random.seed(seed)
     torch.manual_seed(seed)
+
     train_df, eval_df, metadata = load_snapshot(snapshot_dir)
-    train_balance_mode = os.environ['TRAIN_BALANCE_MODE']
     if train_balance_mode == 'balanced':
         balanced_train_df = apply_training_balance(train_df)
     elif train_balance_mode == 'full':
         balanced_train_df = train_df.copy().sort_values('article_id')
     else:
         raise ValueError(f'Unsupported TRAIN_BALANCE_MODE: {train_balance_mode}')
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     if device.type != 'cuda' and not config.ALLOW_TRAINING_WO_GPU:
         raise RuntimeError('GPU not available. Exiting')
 
     total_start = time.perf_counter()
+    logger.info(
+        f'Running embedding experiment: model={model_name}, prompt={embed_prompt_mode}, feature_mode={embed_feature_mode}'
+    )
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
-    model.to(device)
 
     train_texts = build_texts(
         balanced_train_df,
@@ -255,6 +371,7 @@ def main() -> None:
         max_length=max_length,
         text_prep_mode=text_prep_mode,
         prefix_mode=embed_prefix_mode,
+        prompt_mode=embed_prompt_mode,
     )
     eval_texts = build_texts(
         eval_df,
@@ -262,7 +379,9 @@ def main() -> None:
         max_length=max_length,
         text_prep_mode=text_prep_mode,
         prefix_mode=embed_prefix_mode,
+        prompt_mode=embed_prompt_mode,
     )
+
     train_labels = balanced_train_df['label'].to_numpy()
     eval_labels = eval_df['label'].to_numpy()
     sample_weights = np.where(
@@ -276,33 +395,60 @@ def main() -> None:
         torch.cuda.reset_peak_memory_stats()
 
     train_start = time.perf_counter()
-    train_embeddings = encode_texts(
-        model,
-        tokenizer,
-        train_texts,
-        max_length,
-        batch_size,
-        device,
-        embed_pooling,
-        embed_layer_norm,
-        embed_truncate_dim,
-    )
-    eval_embeddings = encode_texts(
-        model,
-        tokenizer,
-        eval_texts,
-        max_length,
-        batch_size,
-        device,
-        embed_pooling,
-        embed_layer_norm,
-        embed_truncate_dim,
-    )
-    clf = LogisticRegression(max_iter=4000, C=linear_c, random_state=seed)
-    clf.fit(train_embeddings, train_labels, sample_weight=sample_weights)
+    if embed_feature_mode == 'dense':
+        model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
+        model.to(device)
+        train_features = encode_dense_texts(
+            model,
+            tokenizer,
+            train_texts,
+            max_length,
+            batch_size,
+            device,
+            embed_pooling,
+            embed_layer_norm,
+            embed_truncate_dim,
+        )
+        eval_features = encode_dense_texts(
+            model,
+            tokenizer,
+            eval_texts,
+            max_length,
+            batch_size,
+            device,
+            embed_pooling,
+            embed_layer_norm,
+            embed_truncate_dim,
+        )
+        solver = 'lbfgs'
+    elif embed_feature_mode in {'sparse', 'hybrid'}:
+        if model_name != 'BAAI/bge-m3':
+            raise RuntimeError('Sparse and hybrid feature modes are currently only supported for BAAI/bge-m3')
+        train_features = encode_bge_m3_features(
+            model_name,
+            train_texts,
+            batch_size,
+            max_length,
+            embed_feature_mode,
+            embed_sparse_hash_dim,
+        )
+        eval_features = encode_bge_m3_features(
+            model_name,
+            eval_texts,
+            batch_size,
+            max_length,
+            embed_feature_mode,
+            embed_sparse_hash_dim,
+        )
+        solver = 'liblinear'
+    else:
+        raise ValueError(f'Unsupported EMBED_FEATURE_MODE: {embed_feature_mode}')
+
+    clf = LogisticRegression(max_iter=4000, C=linear_c, random_state=seed, solver=solver)
+    clf.fit(train_features, train_labels, sample_weight=sample_weights)
     train_seconds = time.perf_counter() - train_start
 
-    probs = clf.predict_proba(eval_embeddings)[:, 1]
+    probs = clf.predict_proba(eval_features)[:, 1]
     metrics = compute_metrics(eval_labels, probs)
     peak_vram_gb = float(torch.cuda.max_memory_allocated() / math.pow(1024, 3)) if torch.cuda.is_available() else 0.0
     total_seconds = time.perf_counter() - total_start
@@ -324,6 +470,9 @@ def main() -> None:
         'train_balance_mode': train_balance_mode,
         'embed_pooling': embed_pooling,
         'embed_prefix_mode': embed_prefix_mode,
+        'embed_prompt_mode': embed_prompt_mode,
+        'embed_feature_mode': embed_feature_mode,
+        'embed_sparse_hash_dim': embed_sparse_hash_dim,
         'embed_layer_norm': embed_layer_norm,
         'embed_truncate_dim': embed_truncate_dim,
     }
