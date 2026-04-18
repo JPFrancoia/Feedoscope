@@ -17,8 +17,9 @@ EMBED_PREFIX_MODE="${EMBED_PREFIX_MODE:-none}"
 EMBED_LAYER_NORM="${EMBED_LAYER_NORM:-0}"
 EMBED_TRUNCATE_DIM="${EMBED_TRUNCATE_DIM:-0}"
 EMBED_ATTN_IMPLEMENTATION="${EMBED_ATTN_IMPLEMENTATION:-}"
+EMBED_DISABLE_MEMORY_EFFICIENT_ATTENTION="${EMBED_DISABLE_MEMORY_EFFICIENT_ATTENTION:-0}"
 EPOCHS="${EPOCHS:-2}"
-RUN_NAME="${RUN_NAME:-$(printf '%s__%s__%s__%s__bs%s__%s__c%s__pool%s__prefix%s__ln%s__dim%s__attn%s' "${MODEL_NAME//\//-}" "${MAX_LENGTH}" "${TEXT_PREP_MODE}" "${CLASSIFIER_TYPE}" "${BATCH_SIZE}" "${TRAIN_BALANCE_MODE}" "${LINEAR_C}" "${EMBED_POOLING}" "${EMBED_PREFIX_MODE}" "${EMBED_LAYER_NORM}" "${EMBED_TRUNCATE_DIM}" "${EMBED_ATTN_IMPLEMENTATION:-default}")}"
+RUN_NAME="${RUN_NAME:-$(printf '%s__%s__%s__%s__bs%s__%s__c%s__pool%s__prefix%s__ln%s__dim%s__attn%s__no_xattn%s' "${MODEL_NAME//\//-}" "${MAX_LENGTH}" "${TEXT_PREP_MODE}" "${CLASSIFIER_TYPE}" "${BATCH_SIZE}" "${TRAIN_BALANCE_MODE}" "${LINEAR_C}" "${EMBED_POOLING}" "${EMBED_PREFIX_MODE}" "${EMBED_LAYER_NORM}" "${EMBED_TRUNCATE_DIM}" "${EMBED_ATTN_IMPLEMENTATION:-default}" "${EMBED_DISABLE_MEMORY_EFFICIENT_ATTENTION}")}"
 OUTPUT_DIR="${OUTPUT_DIR:-artifacts/relevance_autoresearch/runs/${RUN_NAME}}"
 
 if [[ ! -d "${SNAPSHOT_DIR}" ]]; then
@@ -45,6 +46,7 @@ if [[ "${CLASSIFIER_TYPE}" == "embedding_linear" ]]; then
   EMBED_LAYER_NORM="${EMBED_LAYER_NORM}" \
   EMBED_TRUNCATE_DIM="${EMBED_TRUNCATE_DIM}" \
   EMBED_ATTN_IMPLEMENTATION="${EMBED_ATTN_IMPLEMENTATION}" \
+  EMBED_DISABLE_MEMORY_EFFICIENT_ATTENTION="${EMBED_DISABLE_MEMORY_EFFICIENT_ATTENTION}" \
   uv run python - <<'PY'
 import json
 import logging
@@ -59,7 +61,7 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, average_precision_score, f1_score, log_loss, precision_score, recall_score, roc_auc_score
 import torch
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoConfig, AutoModel, AutoTokenizer
 
 from custom_logging import init_logging
 from feedoscope import config
@@ -232,6 +234,7 @@ def main() -> None:
     embed_layer_norm = os.environ['EMBED_LAYER_NORM'] == '1'
     embed_truncate_dim = int(os.environ['EMBED_TRUNCATE_DIM'])
     embed_attn_implementation = os.environ.get('EMBED_ATTN_IMPLEMENTATION') or None
+    embed_disable_memory_efficient_attention = os.environ['EMBED_DISABLE_MEMORY_EFFICIENT_ATTENTION'] == '1'
 
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -252,7 +255,10 @@ def main() -> None:
     model_kwargs = {'trust_remote_code': True}
     if embed_attn_implementation is not None:
         model_kwargs['attn_implementation'] = embed_attn_implementation
-    model = AutoModel.from_pretrained(model_name, **model_kwargs)
+    model_config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+    if embed_disable_memory_efficient_attention and hasattr(model_config, 'use_memory_efficient_attention'):
+        model_config.use_memory_efficient_attention = False
+    model = AutoModel.from_pretrained(model_name, config=model_config, **model_kwargs)
     model.to(device)
 
     train_texts = build_texts(
@@ -333,6 +339,7 @@ def main() -> None:
         'embed_layer_norm': embed_layer_norm,
         'embed_truncate_dim': embed_truncate_dim,
         'embed_attn_implementation': embed_attn_implementation,
+        'embed_disable_memory_efficient_attention': embed_disable_memory_efficient_attention,
     }
     (output_dir / 'results.json').write_text(json.dumps(results, indent=2) + '\n')
     for metric_name in ['average_precision', 'roc_auc', 'log_loss', 'accuracy', 'precision', 'recall', 'f1', 'peak_vram_gb', 'train_seconds', 'total_seconds']:
