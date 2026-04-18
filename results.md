@@ -6,6 +6,7 @@
 ### validate/relevance-embeddinggemma-prod
 
 - Command: `VALIDATION_SIZE=100 make train`
+- Article window: `3 years`
 - Training rows: `6312` good, `1005` bad
 - Training time: `482.17s`
 - Total time: `500.22s`
@@ -22,6 +23,7 @@
 ### validate/relevance-ettin68m-prod
 
 - Command: `VALIDATION_SIZE=100 make train`
+- Article window: `3 years`
 - Training rows: `6312` good, `1005` bad
 - Training time: `418.31s`
 - Total time: `422.43s`
@@ -35,6 +37,7 @@
 ### validate/master-balanced-validation
 
 - Command: `VALIDATION_SIZE=100 make train`
+- Article window: `1 year`
 - Training rows: `1003` good, `1003` bad
 - Training time before crash: `322.13s`
 - Status: crashed during validation
@@ -46,6 +49,7 @@
 ### validate/master-balanced-validation (rerun after cleanup timing fix)
 
 - Command: `VALIDATION_SIZE=100 make train`
+- Article window: `1 year`
 - Training rows: `1003` good, `1003` bad
 - Training time: `311.09s`
 - Total time: `317.79s`
@@ -63,6 +67,7 @@
 ### validate/master-full-validation
 
 - Command: `VALIDATION_SIZE=100 make train`
+- Article window: `1 year`
 - Training rows: `2481` good, `1003` bad
 - Training time: `522.46s`
 - Total time: `529.16s`
@@ -79,6 +84,7 @@
 ### validate/master-full-validation (3-year window rerun)
 
 - Command: `VALIDATION_SIZE=100 make train`
+- Article window: `3 years`
 - Training rows: `6312` good, `1005` bad
 - Training time: `1076.15s`
 - Total time: `1083.17s`
@@ -88,3 +94,17 @@
 - ROC AUC: `0.96`
 - Average Precision: `0.94`
 - Log Loss: `0.30`
+
+### validate/master-balanced-validation (3-year window rerun)
+
+- Command: `VALIDATION_SIZE=100 make train`
+- Article window: `3 years`
+- Training rows: `1005` good, `1005` bad
+- Training time: `311.85s`
+- Total time: `318.68s`
+- Precision: `0.93`
+- Recall: `0.69`
+- F1: `0.79`
+- ROC AUC: `0.95`
+- Average Precision: `0.94`
+- Log Loss: `0.40`
