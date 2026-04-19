@@ -4,6 +4,7 @@ import math
 from pathlib import Path
 
 from huggingface_hub import snapshot_download
+from huggingface_hub.errors import GatedRepoError
 import joblib  # type: ignore[import-untyped]
 import numpy as np
 from sklearn.linear_model import LogisticRegression
@@ -26,12 +27,33 @@ def get_encoder_cache_path() -> Path:
     return ENCODER_CACHE_ROOT / config.RELEVANCE_MODEL_NAME.replace("/", "--")
 
 
+def has_local_encoder_snapshot(encoder_path: Path) -> bool:
+    """Check whether the shared cache already contains a usable encoder snapshot."""
+    has_config = (encoder_path / "config.json").exists()
+    has_tokenizer = any(
+        candidate.exists()
+        for candidate in (
+            encoder_path / "tokenizer.json",
+            encoder_path / "tokenizer.model",
+            encoder_path / "vocab.json",
+        )
+    )
+    has_weights = (
+        any(encoder_path.glob("*.safetensors"))
+        or any(encoder_path.glob("*.bin"))
+        or (encoder_path / "model.safetensors.index.json").exists()
+    )
+    return has_config and has_tokenizer and has_weights
+
+
 def ensure_local_encoder() -> str:
     """Download the shared encoder snapshot once and reuse it afterward."""
     encoder_path = get_encoder_cache_path()
     ready_marker = encoder_path / ENCODER_READY_FILENAME
 
-    if ready_marker.exists():
+    if ready_marker.exists() or has_local_encoder_snapshot(encoder_path):
+        if not ready_marker.exists():
+            ready_marker.write_text("\n")
         logger.info(f"Using cached relevance encoder at {encoder_path}")
         return str(encoder_path)
 
@@ -40,10 +62,17 @@ def ensure_local_encoder() -> str:
         f"{encoder_path}"
     )
     encoder_path.mkdir(parents=True, exist_ok=True)
-    snapshot_download(
-        repo_id=config.RELEVANCE_MODEL_NAME,
-        local_dir=str(encoder_path),
-    )
+    try:
+        snapshot_download(
+            repo_id=config.RELEVANCE_MODEL_NAME,
+            local_dir=str(encoder_path),
+        )
+    except GatedRepoError as exc:
+        raise RuntimeError(
+            "Cannot download the gated relevance encoder. Populate the shared "
+            f"cache at {encoder_path} from an authenticated machine or provide "
+            "Hugging Face credentials before running relevance training or inference."
+        ) from exc
     ready_marker.write_text("\n")
     logger.info(f"Relevance encoder cached at {encoder_path}")
     return str(encoder_path)
