@@ -2,14 +2,11 @@ import asyncio
 import datetime
 import logging
 import os
-import shutil
 import time
-from typing import Any
 
-from datasets import Dataset  # type: ignore[import]
 import numpy as np
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
-    accuracy_score,
     average_precision_score,
     f1_score,
     log_loss,
@@ -18,200 +15,89 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 import torch
-
-# from torch.nn.functional import softmax
-from transformers import (
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-    DataCollatorWithPadding,
-    EarlyStoppingCallback,
-    PreTrainedTokenizerBase,
-    Trainer,
-    TrainerCallback,
-    TrainingArguments,
-)
-from transformers.tokenization_utils_base import BatchEncoding
-from transformers.trainer_utils import EvalPrediction
+from transformers import PreTrainedTokenizerBase
 
 from custom_logging import init_logging
-from feedoscope import config, utils
+from feedoscope import config, relevance_embedding
 from feedoscope.data_registry import data_registry as dr
 from feedoscope.entities import Article
-from feedoscope.llm_infer import clean_checkpoints, find_latest_model
 
 logger = logging.getLogger(__name__)
 
-# https://huggingface.co/blog/ettin
-
-# MODEL_NAME = "distilbert/distilbert-base-uncased"
-MODEL_NAME = "answerdotai/ModernBERT-base"
-# MODEL_NAME = "jhu-clsp/ettin-encoder-150m"
-# MODEL_NAME = "FacebookAI/roberta-base"
-# MODEL_NAME = "jhu-clsp/ettin-encoder-400m"
-# MAX_LENGTH = 4096  # Maximum length for the tokenizer
-MAX_LENGTH = 512  # Maximum length for the tokenizer
-# MAX_LENGTH = 1024  # Maximum length for the tokenizer
-VALIDATION_SIZE = 0
-EPOCHS = 2  # Number of epochs for training
-BATCH_SIZE = 16  # Batch size for training
-# BATCH_SIZE = 8  # Batch size for training
-EXCELLENT_WEIGHT = config.EXCELLENT_WEIGHT
+VALIDATION_SIZE = config.VALIDATION_SIZE
 
 
-def compute_metrics(eval_pred: EvalPrediction) -> dict[str, float | np.floating]:
-    logits, labels = eval_pred
-    # Apply sigmoid to convert logits to probabilities
-    positive_class_probs = torch.sigmoid(torch.tensor(logits)[:, 1]).numpy()
-
-    # Predictions for accuracy based on a 0.5 threshold
-    preds = (positive_class_probs >= 0.5).astype(int)
-
-    # Metrics
-    ap = average_precision_score(labels, positive_class_probs)
-    roc_auc = roc_auc_score(labels, positive_class_probs)
-    acc = accuracy_score(labels, preds)
-    # log_loss requires probabilities, not logits
-    loss = log_loss(labels, positive_class_probs)
-
+def compute_metrics(
+    true_labels: np.ndarray, predicted_probs: np.ndarray
+) -> dict[str, float]:
+    """Compute the relevance validation metrics from predicted probabilities."""
+    pred_labels = (predicted_probs >= 0.5).astype(int)
     return {
-        "average_precision": ap,
-        "roc_auc": roc_auc,
-        "accuracy": acc,
-        "eval_loss": loss,  # Will show up in logs
+        "precision": float(precision_score(true_labels, pred_labels)),
+        "recall": float(recall_score(true_labels, pred_labels)),
+        "f1": float(f1_score(true_labels, pred_labels)),
+        "roc_auc": float(roc_auc_score(true_labels, predicted_probs)),
+        "average_precision": float(
+            average_precision_score(true_labels, predicted_probs)
+        ),
+        "log_loss": float(log_loss(true_labels, predicted_probs)),
     }
 
 
-def preprocess_function(
-    tokenizer: PreTrainedTokenizerBase, examples: dict[str, list[Any]], max_length: int
-) -> BatchEncoding:
-    return tokenizer(examples["text"], truncation=True, max_length=max_length)
-
-
-class ProgressLoggingCallback(TrainerCallback):
-    def on_log(self, args, state, control, logs=None, **kwargs):
-        # state.global_step: current step
-        # state.max_steps: total steps (if known)
-        logger.info(
-            f"Training progress: step {state.global_step}/{state.max_steps or '?'}"
-        )
-
-
-class WeightedTrainer(Trainer):
-    """Trainer subclass that applies per-sample loss weighting.
-
-    Expects a ``weight`` column in the dataset. Upvoted or starred articles
-    receive a higher weight so the model learns to score them higher.
-    """
-
-    def compute_loss(
-        self,
-        model,
-        inputs,
-        return_outputs=False,
-        **kwargs,
-    ):
-        labels = inputs.pop("labels")
-        weights = inputs.pop("weight")
-        outputs = model(**inputs)
-        logits = outputs.logits
-
-        loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
-        loss = loss_fct(logits, labels)
-
-        # Apply per-sample weights and average
-        weighted_loss = (loss * weights).mean()
-
-        return (weighted_loss, outputs) if return_outputs else weighted_loss
+def build_model_path(good_articles: list[Article], bad_articles: list[Article]) -> str:
+    """Build the on-disk artifact path for a relevance training run."""
+    return (
+        f"models/{config.RELEVANCE_MODEL_NAME.replace('/', '-')}_"
+        f"{config.RELEVANCE_MAX_LENGTH}_{config.RELEVANCE_TEXT_PREP_MODE}_"
+        f"embedding_linear_c{config.RELEVANCE_LINEAR_C}_"
+        f"{datetime.date.today().strftime('%Y_%m_%d')}_"
+        f"{len(good_articles)}_good_{len(bad_articles)}_not_good"
+    )
 
 
 async def train_model(
-    model_path: str,
-    tokenizer: PreTrainedTokenizerBase,
     good_articles: list[Article],
     bad_articles: list[Article],
-) -> Trainer:
+    model_path: str,
+    device: torch.device,
+) -> tuple[
+    torch.nn.Module,
+    PreTrainedTokenizerBase,
+    LogisticRegression,
+]:
+    """Train the embedding-linear relevance backend and save its artifact."""
+    tokenizer, encoder = relevance_embedding.load_encoder(device)
+    training_articles = good_articles + bad_articles
+    labels = np.array([1] * len(good_articles) + [0] * len(bad_articles))
+    sample_weights = relevance_embedding.build_sample_weights(training_articles)
 
-    all_articles_raw = good_articles + bad_articles
-    all_articles = utils.prepare_articles_text(all_articles_raw)
-    labels = [1] * len(good_articles) + [0] * len(bad_articles)
-
-    # Assign higher weight to upvoted/starred articles so the model learns
-    # to score them higher than merely-read articles.
-    sample_weights = [
-        EXCELLENT_WEIGHT if (a.vote == 1 or a.starred) else 1.0
-        for a in all_articles_raw
-    ]
-
-    n_excellent = sum(1 for w in sample_weights if w > 1.0)
+    n_excellent = sum(1 for weight in sample_weights if weight > 1.0)
     logger.info(
         f"Sample weights: {n_excellent} excellent articles "
-        f"(weight={EXCELLENT_WEIGHT}), "
+        f"(weight={config.EXCELLENT_WEIGHT}), "
         f"{len(sample_weights) - n_excellent} standard (weight=1.0)"
     )
 
-    # Create Hugging Face Dataset
-    dataset = Dataset.from_list(
-        [
-            {"text": text, "label": label, "weight": weight}
-            for text, label, weight in zip(all_articles, labels, sample_weights)
-        ]
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+
+    embeddings = relevance_embedding.encode_articles(
+        training_articles,
+        tokenizer,
+        encoder,
+        device,
     )
-    split_dataset = dataset.train_test_split(test_size=0.2, seed=42)
-
-    # Drop "text" after tokenization — with remove_unused_columns=False the raw
-    # string column would otherwise be passed to the model and cause errors.
-    tokenized = split_dataset.map(
-        lambda x: preprocess_function(tokenizer, x, max_length=MAX_LENGTH),
-        batched=True,
-        remove_columns=["text"],
+    classifier = relevance_embedding.fit_classifier(embeddings, labels, sample_weights)
+    relevance_embedding.save_artifact(
+        model_path,
+        classifier,
+        train_counts={"good": len(good_articles), "bad": len(bad_articles)},
     )
-
-    data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
-    training_args = TrainingArguments(
-        output_dir=model_path,
-        learning_rate=2e-5,
-        per_device_train_batch_size=BATCH_SIZE,
-        per_device_eval_batch_size=BATCH_SIZE,
-        num_train_epochs=EPOCHS,
-        weight_decay=0.01,
-        eval_strategy="epoch",
-        save_strategy="epoch",
-        load_best_model_at_end=True,
-        push_to_hub=False,
-        metric_for_best_model="average_precision",
-        logging_strategy="steps",
-        logging_steps=2,
-        disable_tqdm=True,
-        logging_first_step=True,
-        # Keep the "weight" column so WeightedTrainer.compute_loss() can use it.
-        # Without this, Trainer strips columns not in the model's forward() signature.
-        remove_unused_columns=False,
-    )
-
-    model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME, num_labels=2)
-
-    trainer = WeightedTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=tokenized["train"],
-        eval_dataset=tokenized["test"],
-        processing_class=tokenizer,
-        data_collator=data_collator,
-        compute_metrics=compute_metrics,
-        # stop training if no improvement for 2 epochs
-        callbacks=[
-            EarlyStoppingCallback(early_stopping_patience=2),
-            ProgressLoggingCallback(),
-        ],
-    )
-
-    trainer.train()
-
-    return trainer
+    return encoder, tokenizer, classifier
 
 
 async def main() -> None:
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
 
@@ -222,134 +108,77 @@ async def main() -> None:
 
     start_time = time.time()
 
-    logger.debug("Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    logger.debug("Tokenizer loaded successfully.")
-
     await dr.global_pool.open(wait=True)
 
     bad_articles = await dr.get_published_articles(validation_size=VALIDATION_SIZE)
     good_articles = await dr.get_read_articles_training(validation_size=VALIDATION_SIZE)
 
-    # Ensure roughly equal number of good and bad articles, but always keep
-    # starred/upvoted ("excellent") articles so they are never dropped.
-    min_count = min(len(good_articles), len(bad_articles))
-
-    excellent = [a for a in good_articles if a.vote == 1 or a.starred]
-    regular = [a for a in good_articles if not (a.vote == 1 or a.starred)]
-
-    # Fill remaining slots with the most recent regular articles.
-    remaining_slots = max(0, min_count - len(excellent))
-    regular = regular[-remaining_slots:] if remaining_slots > 0 else []
-    good_articles = sorted(regular + excellent, key=lambda a: a.article_id)
-
-    bad_articles = bad_articles[-min_count:]
-
-    n_protected = len(excellent)
-    logger.debug(
+    logger.info(
         f"Collected {len(good_articles)} good articles "
-        f"({n_protected} starred/upvoted always kept)."
+        f"({sum(1 for article in good_articles if article.vote == 1 or article.starred)} starred/upvoted)."
     )
-    logger.debug(f"Collected {len(bad_articles)} bad articles.")
+    logger.info(f"Collected {len(bad_articles)} bad articles.")
 
-    # Add the date to the model path to make sure trained models can be sorted.
-    # The directory path MUST start with the model name (after models/). This
-    # is important, we rely on this in llm_infer.py to find the right model to use.
-    # It MUST be followed by the date of the training run, in YYYY-MM-DD format.
-    model_path = f"models/{MODEL_NAME.replace('/', '-')}_{MAX_LENGTH}_{EPOCHS}_epochs_{BATCH_SIZE}_batch_size_{datetime.date.today().strftime('%Y_%m_%d')}_{len(good_articles)}_good_{len(bad_articles)}_not_good"
+    model_path = build_model_path(good_articles, bad_articles)
 
     if os.path.exists(model_path):
-        logger.info(f"Loading model from {model_path}")
-
-        try:
-            model = AutoModelForSequenceClassification.from_pretrained(model_path)
-        except ValueError as e:
-            # handle this error: ValueError: Unrecognized model in models/answerdotai-[..]
-            # When this happens, it's likely because a previous run created the
-            # directory but the training run didn't complete and left an empty directory.
-            logger.error(f"Error loading model: {e}")
-            logger.info("Model not found or corrupted, deleting the model path.")
-            shutil.rmtree(model_path)
-            raise RuntimeError(
-                f"Model not found or corrupted at {model_path}. The model's directory has been deleted."
-            )
-
+        logger.info(f"Loading embedding artifact from {model_path}")
+        tokenizer, encoder = relevance_embedding.load_encoder(device)
+        classifier = relevance_embedding.load_classifier(model_path)
     else:
-        logger.info("Training new model...")
-        trainer = await train_model(model_path, tokenizer, good_articles, bad_articles)
-        trainer.save_model(model_path)
-        clean_checkpoints(model_path)
-        model = trainer.model
-        logger.info(f"Model saved to {model_path}")
-
-    # Delete any older relevance models, keeping only the latest.
-    find_latest_model(MODEL_NAME.replace("/", "-"), clean_old_models=True)
+        logger.info("Training new embedding-linear relevance backend...")
+        encoder, tokenizer, classifier = await train_model(
+            good_articles,
+            bad_articles,
+            model_path,
+            device,
+        )
+        logger.info(f"Embedding artifact saved to {model_path}")
 
     elapsed_time = time.time() - start_time
     logger.info(f"Training completed in {elapsed_time:.2f} seconds.")
 
     if VALIDATION_SIZE == 0:
         logger.info("No validation size set, skipping validation.")
+        await dr.global_pool.close()
         return
 
-    logger.debug("Loading good and not good articles for validation...")
-    good_articles = await dr.get_sample_good(validation_size=VALIDATION_SIZE)
-    not_good_articles = await dr.get_sample_not_good(validation_size=VALIDATION_SIZE)
-    good_texts = utils.prepare_articles_text(good_articles)
-    not_good_texts = utils.prepare_articles_text(not_good_articles)
-    logger.debug(
-        f"Collected {len(good_texts)} good articles and {len(not_good_texts)} not good articles."
+    logger.info("Starting relevance validation...")
+    good_validation = await dr.get_sample_good(validation_size=VALIDATION_SIZE)
+    not_good_validation = await dr.get_sample_not_good(validation_size=VALIDATION_SIZE)
+    logger.info(
+        f"Loaded {len(good_validation)} good and {len(not_good_validation)} not good validation articles"
     )
 
-    logger.debug("Tokenizing articles for validation...")
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
-    inputs_good = tokenizer(
-        good_texts,
-        padding=True,
-        truncation=True,
-        max_length=MAX_LENGTH,
-        return_tensors="pt",
+    good_probs = relevance_embedding.predict_probabilities(
+        good_validation,
+        tokenizer,
+        encoder,
+        classifier,
+        device,
     )
-    inputs_not_good = tokenizer(
-        not_good_texts,
-        padding=True,
-        truncation=True,
-        max_length=MAX_LENGTH,
-        return_tensors="pt",
+    not_good_probs = relevance_embedding.predict_probabilities(
+        not_good_validation,
+        tokenizer,
+        encoder,
+        classifier,
+        device,
     )
-    logger.debug("Articles tokenized successfully.")
-
-    model.to(device)
-    with torch.no_grad():
-        inputs_good = {k: v.to(device) for k, v in inputs_good.items()}
-        inputs_not_good = {k: v.to(device) for k, v in inputs_not_good.items()}
-        good_preds = model(**inputs_good).logits
-        not_good_preds = model(**inputs_not_good).logits
-
-    # Sigmoid is an alternative to softmax when there are only two classes
-    good_probs = torch.sigmoid(good_preds[:, 1]).cpu().numpy()
-    not_good_probs = torch.sigmoid(not_good_preds[:, 1]).cpu().numpy()
 
     all_probs = np.concatenate([good_probs, not_good_probs])
     true_labels = np.concatenate(
         [np.ones(len(good_probs)), np.zeros(len(not_good_probs))]
     )
-    pred_labels = (all_probs >= 0.5).astype(int)
 
-    # Compute metrics
-    precision = precision_score(true_labels, pred_labels)
-    recall = recall_score(true_labels, pred_labels)
-    f1 = f1_score(true_labels, pred_labels)
-    roc_auc = roc_auc_score(true_labels, all_probs)
-    ap = average_precision_score(true_labels, all_probs)
-    logloss = log_loss(true_labels, all_probs)
-
-    logger.info(f"Precision: {precision:.2f}")
-    logger.info(f"Recall: {recall:.2f}")
-    logger.info(f"F1 score: {f1:.2f}")
-    logger.info(f"ROC AUC: {roc_auc:.2f}")
-    logger.info(f"Average Precision: {ap:.2f}")
-    logger.info(f"Log Loss: {logloss:.2f}")
+    metrics = compute_metrics(true_labels, all_probs)
+    logger.info(f"Precision: {metrics['precision']:.2f}")
+    logger.info(f"Recall: {metrics['recall']:.2f}")
+    logger.info(f"F1 score: {metrics['f1']:.2f}")
+    logger.info(f"ROC AUC: {metrics['roc_auc']:.2f}")
+    logger.info(f"Average Precision: {metrics['average_precision']:.2f}")
+    logger.info(f"Log Loss: {metrics['log_loss']:.2f}")
+    logger.info(f"Peak VRAM: {relevance_embedding.peak_vram_gb():.2f} GB")
+    logger.info("Relevance validation completed")
 
     await dr.global_pool.close()
 

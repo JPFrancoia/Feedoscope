@@ -22,7 +22,7 @@ with numbered_articles as (
         left join time_sensitivity ts on ts.article_id = e.id
     where
         e.vote = -1  -- Bad articles
-        and e.published_at > now() - interval '1 year'
+        and e.published_at > now() - interval '3 years'
     order by
         e.id asc
 )

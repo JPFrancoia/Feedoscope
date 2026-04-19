@@ -6,23 +6,19 @@ import time
 
 import numpy as np
 import torch
-from transformers import (
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-)
 
 from custom_logging import init_logging
-from feedoscope import config, utils
+from feedoscope import config, relevance_embedding
 from feedoscope.data_registry import data_registry as dr
 from feedoscope.entities import Article, RelevanceInferenceResults
 
 logger = logging.getLogger(__name__)
 
-# https://huggingface.co/blog/ettin
-
-MODEL_NAME = "answerdotai-ModernBERT-base_512_2_epochs_16_batch_size"
-MAX_LENGTH = 512  # Maximum length for the tokenizer
-INFERENCE_BATCH_SIZE = 128
+MODEL_NAME = (
+    f"{config.RELEVANCE_MODEL_NAME.replace('/', '-')}_"
+    f"{config.RELEVANCE_MAX_LENGTH}_{config.RELEVANCE_TEXT_PREP_MODE}_"
+    f"embedding_linear_c{config.RELEVANCE_LINEAR_C}"
+)
 
 
 def find_latest_model(model_name: str, clean_old_models: bool = True) -> str:
@@ -33,7 +29,7 @@ def find_latest_model(model_name: str, clean_old_models: bool = True) -> str:
     latest. This should be true if the model names include the training date.
 
     Args:
-        model_name: family of model to use, e.g. "jhu-clsp-ettin-encoder-150m"
+        model_name: family of model to use.
         clean_old_models: if True, delete all older models starting with model_name
             except the latest one
 
@@ -44,8 +40,6 @@ def find_latest_model(model_name: str, clean_old_models: bool = True) -> str:
         FileNotFoundError: if no trained models are found for the given model_name.
 
     """
-    # iterate through the models directory. Look for the model starting with
-    # the model_name. sort by name and return the last one.
     models_dir = "models"
     if not os.path.exists(models_dir):
         raise FileNotFoundError(f"Directory {models_dir} does not exist.")
@@ -54,11 +48,10 @@ def find_latest_model(model_name: str, clean_old_models: bool = True) -> str:
         raise FileNotFoundError(
             f"No models found starting with {model_name} in {models_dir}."
         )
-    model_dirs.sort()  # Sort by name, assuming the latest model has the highest name
+    model_dirs.sort()
     latest_model = model_dirs[-1]
 
     if clean_old_models:
-        # Delete all older models (keep only the latest)
         for older_model in model_dirs[:-1]:
             older_model_path = os.path.join(models_dir, older_model)
             try:
@@ -94,78 +87,45 @@ def clean_checkpoints(model_path: str) -> None:
 
 
 async def infer(recent_unread_articles: list[Article]) -> RelevanceInferenceResults:
-
+    """Score unread articles with the latest saved relevance artifact."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
 
-    # Crash on GPU not available if ALLOW_INFERENCE_WO_GPU is False
     if device.type != "cuda" and not config.ALLOW_INFERENCE_WO_GPU:
         mes = f"GPU not available. Device is '{device}'. Exiting"
         logger.critical(mes)
         raise RuntimeError(mes)
 
-    model_path = find_latest_model(MODEL_NAME.replace("/", "-"))
+    model_path = find_latest_model(MODEL_NAME)
+    logger.info(f"Loading embedding-linear relevance artifact from {model_path}")
 
-    logger.info(f"Loading model from {model_path}")
-    model = AutoModelForSequenceClassification.from_pretrained(model_path)
-    model.to(device)  # Move model to GPU if available
-
-    articles_text = utils.prepare_articles_text(recent_unread_articles)
-
-    logger.debug("Tokenizing articles for inference...")
-
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
-    inputs = tokenizer(
-        articles_text,
-        padding=True,
-        truncation=True,
-        max_length=MAX_LENGTH,
-        return_tensors="pt",
+    classifier = relevance_embedding.load_classifier(model_path)
+    tokenizer, encoder = relevance_embedding.load_encoder(device)
+    probs = relevance_embedding.predict_probabilities(
+        recent_unread_articles,
+        tokenizer,
+        encoder,
+        classifier,
+        device,
     )
-
-    logger.debug("Articles tokenized successfully.")
-
-    logger.debug("Inferencing...")
-
-    all_probs: list[np.ndarray] = []
-    model.eval()
-    with torch.no_grad():
-        for start in range(0, len(articles_text), INFERENCE_BATCH_SIZE):
-            logger.debug(
-                f"Processing batch {start // INFERENCE_BATCH_SIZE + 1} of {len(articles_text) // INFERENCE_BATCH_SIZE + 1}"
-            )
-            end = start + INFERENCE_BATCH_SIZE
-            batch_inputs = {k: v[start:end].to(device) for k, v in inputs.items()}
-            preds = model(**batch_inputs).logits
-            probs = torch.sigmoid(preds[:, 1]).cpu().numpy()
-            all_probs.extend(probs)
-
-    logger.debug("Inference completed successfully.")
-
-    probs = np.round(np.array(all_probs) * 100).astype(int).tolist()
-
-    article_ids = [article.article_id for article in recent_unread_articles]
-    # Keep original titles unchanged
-    article_titles = [article.title for article in recent_unread_articles]
+    scores = np.round(probs * 100).astype(int).tolist()
 
     return RelevanceInferenceResults(
-        article_ids=article_ids,
-        article_titles=article_titles,
-        scores=probs,
+        article_ids=[article.article_id for article in recent_unread_articles],
+        article_titles=[article.title for article in recent_unread_articles],
+        scores=scores,
     )
 
 
 async def main() -> None:
+    """Run relevance inference and write scores back to the database."""
     await dr.global_pool.open(wait=True)
 
     recent_unread_articles = await dr.get_previous_days_unread_articles()
-
     logger.debug(f"Collected {len(recent_unread_articles)} recent unread articles.")
 
     start_time = time.time()
-
     results = await infer(recent_unread_articles)
-
     elapsed_time = time.time() - start_time
     logger.info(
         f"Inference completed in {elapsed_time:.2f} seconds for {len(recent_unread_articles)} articles."

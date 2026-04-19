@@ -23,7 +23,7 @@ with numbered_articles as (
     where
         e.status = 'read'
         and e.vote >= 0  -- vote=0 or vote=1 are considered good
-        and e.published_at > now() - interval '1 year'
+        and e.published_at > now() - interval '3 years'
     order by
         e.id asc
 )
