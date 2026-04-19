@@ -1,8 +1,9 @@
 from functools import lru_cache
 from importlib.resources import files
 import logging
-from typing import Any, LiteralString, cast
+from typing import LiteralString, cast
 
+import numpy as np
 from psycopg import AsyncConnection
 from psycopg.rows import DictRow, dict_row
 from psycopg_pool import AsyncConnectionPool
@@ -41,6 +42,17 @@ def _get_query_from_file(filename: str) -> LiteralString:
     query = cast(LiteralString, query)
 
     return query
+
+
+def _parse_embedding_bytes(raw_bytes: bytes | memoryview) -> np.ndarray:
+    """Convert stored raw float32 bytes into a dense NumPy embedding."""
+    buffer = raw_bytes.tobytes() if isinstance(raw_bytes, memoryview) else raw_bytes
+    return np.frombuffer(buffer, dtype=np.float32).copy()
+
+
+def _format_embedding_bytes(embedding: np.ndarray) -> bytes:
+    """Serialize a dense embedding as raw float32 bytes for storage."""
+    return np.asarray(embedding, dtype=np.float32).tobytes()
 
 
 async def get_read_articles_training(
@@ -240,6 +252,93 @@ async def update_scores(
             [
                 {"score": score, "int_id": int_id}
                 for score, int_id in zip(scores, article_ids)
+            ],
+        )
+
+
+async def get_relevance_embeddings(
+    article_ids: list[int],
+    model_name: str,
+    max_length: int,
+    text_prep_mode: str,
+    prep_version: int,
+) -> dict[int, tuple[str, np.ndarray]]:
+    """Fetch cached relevance embeddings for one embedding configuration.
+
+    Args:
+        article_ids: Article IDs to look up.
+        model_name: Encoder repository or identifier.
+        max_length: Token budget used to prepare the text.
+        text_prep_mode: Relevance text preparation mode.
+        prep_version: Explicit cache-busting version for prep logic.
+
+    Returns:
+        Mapping of article ID to ``(text_hash, embedding)``.
+
+    """
+    if not article_ids:
+        return {}
+
+    query = _get_query_from_file("get_relevance_embeddings.sql")
+
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(
+            query,
+            {
+                "article_ids": article_ids,
+                "model_name": model_name,
+                "max_length": max_length,
+                "text_prep_mode": text_prep_mode,
+                "prep_version": prep_version,
+            },
+        )
+        data = await cur.fetchall()
+
+    return {
+        row["article_id"]: (
+            row["text_hash"],
+            _parse_embedding_bytes(row["embedding"]),
+        )
+        for row in data
+    }
+
+
+async def upsert_relevance_embeddings(
+    rows: list[tuple[int, str, np.ndarray]],
+    model_name: str,
+    max_length: int,
+    text_prep_mode: str,
+    prep_version: int,
+) -> None:
+    """Insert or replace cached relevance embeddings for one configuration.
+
+    Args:
+        rows: ``(article_id, text_hash, embedding)`` rows to upsert.
+        model_name: Encoder repository or identifier.
+        max_length: Token budget used to prepare the text.
+        text_prep_mode: Relevance text preparation mode.
+        prep_version: Explicit cache-busting version for prep logic.
+
+    """
+    if not rows:
+        return
+
+    query = _get_query_from_file("upsert_relevance_embeddings.sql")
+
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.executemany(
+            query,
+            [
+                {
+                    "article_id": article_id,
+                    "model_name": model_name,
+                    "max_length": max_length,
+                    "text_prep_mode": text_prep_mode,
+                    "prep_version": prep_version,
+                    "text_hash": text_hash,
+                    "embedding": _format_embedding_bytes(embedding),
+                }
+                for article_id, text_hash, embedding in rows
             ],
         )
 

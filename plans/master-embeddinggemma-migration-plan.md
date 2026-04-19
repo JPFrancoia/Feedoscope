@@ -196,6 +196,8 @@ Updated files:
   `metadata.json`.
 - The shared EmbeddingGemma cache is separate from each trained classifier
   artifact; `models/` persistence is therefore required for cold-start avoidance.
+- The Hugging Face repo is gated, so unattended first-run downloads require
+  credentials unless the shared encoder cache is pre-populated on disk.
 - If `eval_models.py` is not updated in the same change, `make eval` will become
   misleading.
 - The validated Gemma branch currently logs less than `master`. The migration should
@@ -237,6 +239,7 @@ Still pending:
 
 - DB-backed `make train`, `make infer`, and `make eval` validation against a live `DATABASE_URL`
 - Verify the shared encoder cache is reused on a second run without a re-download
+- Verify pre-populated shared cache works without the `.snapshot_complete` marker
 - Metric comparison against the validated Gemma baseline after a real training run
 
 Expected ballpark from the validated Gemma production-style run:

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import math
@@ -12,6 +13,7 @@ import torch
 from transformers import AutoModel, AutoTokenizer, PreTrainedTokenizerBase
 
 from feedoscope import config, relevance_text
+from feedoscope.data_registry import data_registry as dr
 from feedoscope.entities import Article
 
 logger = logging.getLogger(__name__)
@@ -100,24 +102,34 @@ def load_encoder(
     return tokenizer, model
 
 
-def mean_pool(
-    last_hidden_state: torch.Tensor,
-    attention_mask: torch.Tensor,
-) -> torch.Tensor:
-    """Average token embeddings across non-padding positions."""
-    mask = attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
-    summed = torch.sum(last_hidden_state * mask, dim=1)
-    counts = torch.clamp(mask.sum(dim=1), min=1e-9)
-    return summed / counts
+def get_cache_config() -> dict[str, str | int]:
+    """Return the configuration values that define the embedding output."""
+    return {
+        "model_name": config.RELEVANCE_MODEL_NAME,
+        "max_length": config.RELEVANCE_MAX_LENGTH,
+        "text_prep_mode": config.RELEVANCE_TEXT_PREP_MODE,
+        "prep_version": config.RELEVANCE_PREP_VERSION,
+    }
 
 
-def encode_articles(
+def get_encoder_output_dim(model: torch.nn.Module) -> int:
+    """Return the embedding width produced by the current encoder path."""
+    hidden_size = getattr(getattr(model, "config", None), "hidden_size", None)
+    if hidden_size is None:
+        raise RuntimeError("Relevance encoder config is missing hidden_size")
+    return int(hidden_size)
+
+
+def hash_prepared_text(text: str) -> str:
+    """Build a stable hash for prepared article text."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def prepare_articles_text(
     articles: list[Article],
     tokenizer: PreTrainedTokenizerBase,
-    model: torch.nn.Module,
-    device: torch.device,
-) -> np.ndarray:
-    """Prepare article text and convert it into normalized embeddings."""
+) -> list[str]:
+    """Prepare article text once before cache lookup or encoding."""
     logger.info(
         f"Preparing relevance text for {len(articles)} articles using "
         f"{config.RELEVANCE_TEXT_PREP_MODE}"
@@ -129,7 +141,94 @@ def encode_articles(
         mode=config.RELEVANCE_TEXT_PREP_MODE,
     )
     logger.info(f"Prepared relevance text for {len(texts)} articles")
-    return encode_texts(texts, tokenizer, model, device)
+    return texts
+
+
+def mean_pool(
+    last_hidden_state: torch.Tensor,
+    attention_mask: torch.Tensor,
+) -> torch.Tensor:
+    """Average token embeddings across non-padding positions."""
+    mask = attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
+    summed = torch.sum(last_hidden_state * mask, dim=1)
+    counts = torch.clamp(mask.sum(dim=1), min=1e-9)
+    return summed / counts
+
+
+async def encode_articles(
+    articles: list[Article],
+    tokenizer: PreTrainedTokenizerBase,
+    model: torch.nn.Module,
+    device: torch.device,
+) -> np.ndarray:
+    """Prepare article text, reuse cached vectors, and encode only misses."""
+    if not articles:
+        return np.empty((0, get_encoder_output_dim(model)), dtype=np.float32)
+
+    texts = prepare_articles_text(articles, tokenizer)
+    text_hashes = [hash_prepared_text(text) for text in texts]
+    article_ids = [article.article_id for article in articles]
+    cache_config = get_cache_config()
+    cached = await dr.get_relevance_embeddings(
+        article_ids=article_ids,
+        model_name=str(cache_config["model_name"]),
+        max_length=int(cache_config["max_length"]),
+        text_prep_mode=str(cache_config["text_prep_mode"]),
+        prep_version=int(cache_config["prep_version"]),
+    )
+
+    expected_dim = get_encoder_output_dim(model)
+    hits = 0
+    stale = 0
+    miss_indices: list[int] = []
+    miss_texts: list[str] = []
+    results: list[np.ndarray | None] = [None] * len(articles)
+
+    for index, article_id in enumerate(article_ids):
+        cached_row = cached.get(article_id)
+        if cached_row is not None:
+            cached_text_hash, cached_embedding = cached_row
+            # The cache key is one row per article/config. A text hash mismatch
+            # means the article content or prep output changed, so we overwrite
+            # that row rather than creating another version.
+            if (
+                cached_text_hash == text_hashes[index]
+                and cached_embedding.size == expected_dim
+            ):
+                results[index] = cached_embedding
+                hits += 1
+                continue
+            stale += 1
+
+        miss_indices.append(index)
+        miss_texts.append(texts[index])
+
+    logger.info(
+        f"Relevance embedding cache: {hits} hits, {len(miss_indices)} misses"
+        + (f" ({stale} stale)" if stale else "")
+    )
+
+    if miss_texts:
+        fresh_embeddings = encode_texts(miss_texts, tokenizer, model, device)
+        upsert_rows: list[tuple[int, str, np.ndarray]] = []
+
+        for offset, index in enumerate(miss_indices):
+            embedding = np.asarray(fresh_embeddings[offset], dtype=np.float32)
+            results[index] = embedding
+            upsert_rows.append((article_ids[index], text_hashes[index], embedding))
+
+        await dr.upsert_relevance_embeddings(
+            rows=upsert_rows,
+            model_name=str(cache_config["model_name"]),
+            max_length=int(cache_config["max_length"]),
+            text_prep_mode=str(cache_config["text_prep_mode"]),
+            prep_version=int(cache_config["prep_version"]),
+        )
+
+    assert all(
+        embedding is not None for embedding in results
+    ), "Internal error: missing relevance embeddings after cache fill"
+    return np.stack([embedding for embedding in results if embedding is not None])
 
 
 def encode_texts(
@@ -140,7 +239,7 @@ def encode_texts(
 ) -> np.ndarray:
     """Encode raw text batches into normalized dense vectors."""
     if not texts:
-        return np.empty((0, 0), dtype=np.float32)
+        return np.empty((0, get_encoder_output_dim(model)), dtype=np.float32)
 
     embeddings: list[np.ndarray] = []
     total_batches = math.ceil(len(texts) / config.RELEVANCE_ENCODER_BATCH_SIZE)
@@ -216,6 +315,7 @@ def save_artifact(
         "encoder_cache_path": str(get_encoder_cache_path()),
         "max_length": config.RELEVANCE_MAX_LENGTH,
         "text_prep_mode": config.RELEVANCE_TEXT_PREP_MODE,
+        "prep_version": config.RELEVANCE_PREP_VERSION,
         "linear_c": config.RELEVANCE_LINEAR_C,
         "batch_size": config.RELEVANCE_ENCODER_BATCH_SIZE,
         "train_counts": train_counts,
@@ -230,7 +330,7 @@ def load_classifier(model_path: str) -> LogisticRegression:
     return joblib.load(Path(model_path) / CLASSIFIER_FILENAME)
 
 
-def predict_probabilities(
+async def predict_probabilities(
     articles: list[Article],
     tokenizer: PreTrainedTokenizerBase,
     model: torch.nn.Module,
@@ -241,7 +341,7 @@ def predict_probabilities(
     if not articles:
         return np.array([], dtype=float)
 
-    embeddings = encode_articles(articles, tokenizer, model, device)
+    embeddings = await encode_articles(articles, tokenizer, model, device)
     probs = classifier.predict_proba(embeddings)[:, 1]
     return np.clip(probs, 1e-7, 1 - 1e-7)
 

@@ -101,7 +101,7 @@ async def infer(recent_unread_articles: list[Article]) -> RelevanceInferenceResu
 
     classifier = relevance_embedding.load_classifier(model_path)
     tokenizer, encoder = relevance_embedding.load_encoder(device)
-    probs = relevance_embedding.predict_probabilities(
+    probs = await relevance_embedding.predict_probabilities(
         recent_unread_articles,
         tokenizer,
         encoder,

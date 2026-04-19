@@ -196,7 +196,7 @@ def _run_inference(
     return np.array(all_probs)
 
 
-def _run_relevance_inference(
+async def _run_relevance_inference(
     encoder: torch.nn.Module,
     tokenizer: PreTrainedTokenizerBase,
     classifier: LogisticRegression,
@@ -204,7 +204,7 @@ def _run_relevance_inference(
     device: torch.device,
 ) -> np.ndarray:
     """Run held-out relevance inference with the embedding-linear backend."""
-    return relevance_embedding.predict_probabilities(
+    return await relevance_embedding.predict_probabilities(
         articles,
         tokenizer,
         encoder,
@@ -279,14 +279,14 @@ async def eval_relevance(device: torch.device) -> None:
         logger.info("[Relevance] Eval model trained successfully.")
 
         # Run inference on held-out set.
-        good_probs = _run_relevance_inference(
+        good_probs = await _run_relevance_inference(
             encoder,
             tokenizer,
             classifier,
             eval_good,
             device,
         )
-        bad_probs = _run_relevance_inference(
+        bad_probs = await _run_relevance_inference(
             encoder,
             tokenizer,
             classifier,

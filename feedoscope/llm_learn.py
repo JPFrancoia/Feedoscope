@@ -82,7 +82,7 @@ async def train_model(
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
 
-    embeddings = relevance_embedding.encode_articles(
+    embeddings = await relevance_embedding.encode_articles(
         training_articles,
         tokenizer,
         encoder,
@@ -150,14 +150,14 @@ async def main() -> None:
         f"Loaded {len(good_validation)} good and {len(not_good_validation)} not good validation articles"
     )
 
-    good_probs = relevance_embedding.predict_probabilities(
+    good_probs = await relevance_embedding.predict_probabilities(
         good_validation,
         tokenizer,
         encoder,
         classifier,
         device,
     )
-    not_good_probs = relevance_embedding.predict_probabilities(
+    not_good_probs = await relevance_embedding.predict_probabilities(
         not_good_validation,
         tokenizer,
         encoder,
