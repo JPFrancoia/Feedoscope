@@ -21,7 +21,6 @@
 - peak_vram_gb: `4.8390879631`
 - train_seconds: `111.1519731370`
 - total_seconds: `144.0991962420`
-- takeaway: bootstrap control established the first kept urgency baseline.
 
 ### 2026-04-20 — Run 2 — DISCARD
 
@@ -37,7 +36,6 @@
 - peak_vram_gb: `4.8433485031`
 - train_seconds: `141.7875018090`
 - total_seconds: `194.2105380010`
-- takeaway: `single_blob` lost to `title_head` on AP, log loss, recall, and runtime.
 
 ### 2026-04-20 — Run 3 — DISCARD
 
@@ -53,13 +51,42 @@
 - peak_vram_gb: `2.0092988014`
 - train_seconds: `57.0956205410`
 - total_seconds: `105.3120600280`
-- takeaway: DistilBERT was much cheaper and slightly better calibrated, but it lost on the primary AP metric versus the ModernBERT control.
+
+### 2026-04-20 — Run 4 — KEEP
+
+- config: `google/embeddinggemma-300m`, `classifier_type=embedding_linear`, `max_length=2048`, `text_prep_mode=title_head`, `train_balance_mode=full`, `embed_pooling=mean`, `linear_c=1.0`
+- average_precision: `0.8725124745`
+- roc_auc: `0.7579914268`
+- log_loss: `0.5931367270`
+- accuracy: `0.6766917293`
+- precision: `0.8506787330`
+- recall: `0.6619718310`
+- f1: `0.7445544554`
+- brier_score: `0.2039524877`
+- peak_vram_gb: `3.2217602730`
+- train_seconds: `226.4302724800`
+- total_seconds: `274.8645930420`
+
+### 2026-04-20 — Run 5 — DISCARD
+
+- config: `BAAI/bge-m3`, `classifier_type=embedding_linear`, `max_length=2048`, `text_prep_mode=title_head`, `train_balance_mode=full`, `embed_pooling=mean`, `linear_c=1.0`
+- average_precision: `0.8707938576`
+- roc_auc: `0.7388854868`
+- log_loss: `0.6070791415`
+- accuracy: `0.6566416040`
+- precision: `0.8550724638`
+- recall: `0.6232394366`
+- f1: `0.7209775967`
+- brier_score: `0.2105787899`
+- peak_vram_gb: `3.0217294693`
+- train_seconds: `437.0712764640`
+- total_seconds: `476.1181968600`
 
 ## Current Best Kept Run
 
-- Run 1: `ModernBERT-base` + `title_head` + transformer @ 512
-- best average_precision: `0.8707539292`
+- Run 4: `embeddinggemma-300m` + `title_head` + embedding_linear @ 2048
+- best average_precision: `0.8725124745`
 
 ## Next Required Run
 
-1. `google/embeddinggemma-300m @ 2048`, `title_head`, `embedding_linear`
+1. `Alibaba-NLP/gte-large-en-v1.5 @ 2048`, `title_head`, `embedding_linear`
