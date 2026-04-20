@@ -10,3 +10,4 @@ test_token.py
 *.pkl
 *.npy
 mistral/*
+artifacts/
