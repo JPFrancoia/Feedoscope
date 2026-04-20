@@ -28,19 +28,26 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
+from sklearn.model_selection import train_test_split
 import torch
-from transformers import AutoTokenizer, PreTrainedTokenizerBase
+from transformers import PreTrainedTokenizerBase
 
 from custom_logging import init_logging
-from feedoscope import config, llm_learn, llm_learn_urgency, relevance_embedding, utils
+from feedoscope import (
+    config,
+    llm_learn,
+    llm_learn_urgency,
+    relevance_embedding,
+    urgency_embedding,
+)
 from feedoscope.data_registry import data_registry as dr
 from feedoscope.entities import Article
 
 logger = logging.getLogger(__name__)
 
 # Eval model paths use these prefixes. They do NOT match any production model
-# prefix (google-embeddinggemma-300m_* or urgency-ModernBERT-base_*), so
-# find_latest_model() will never find or delete them.
+# prefix (google-embeddinggemma-300m_* or urgency_google-embeddinggemma-300m_*),
+# so find_latest_model() will never find or delete them.
 EVAL_RELEVANCE_PREFIX = "eval_relevance"
 EVAL_URGENCY_PREFIX = "eval_urgency"
 
@@ -85,9 +92,9 @@ def compute_and_log_metrics(
 
     metrics = {
         "accuracy": float(accuracy_score(true_labels, pred_labels)),
-        "precision": float(precision_score(true_labels, pred_labels)),
-        "recall": float(recall_score(true_labels, pred_labels)),
-        "f1": float(f1_score(true_labels, pred_labels)),
+        "precision": float(precision_score(true_labels, pred_labels, zero_division=0)),
+        "recall": float(recall_score(true_labels, pred_labels, zero_division=0)),
+        "f1": float(f1_score(true_labels, pred_labels, zero_division=0)),
         "roc_auc": float(roc_auc_score(true_labels, predicted_probs)),
         "average_precision": float(
             average_precision_score(true_labels, predicted_probs)
@@ -155,47 +162,6 @@ def save_eval_results(
     logger.info(f"[{model_name}] Evaluation results saved to {EVAL_HISTORY_PATH}.")
 
 
-def _run_inference(
-    model: torch.nn.Module,
-    tokenizer: PreTrainedTokenizerBase,
-    articles: list[Article],
-    device: torch.device,
-) -> np.ndarray:
-    """Run inference on a list of articles and return positive-class probabilities.
-
-    Args:
-        model: The trained classification model.
-        tokenizer: Tokenizer matching the model.
-        articles: Articles to run inference on.
-        device: Device to run inference on (CPU or CUDA).
-
-    Returns:
-        Array of probabilities for the positive class (shape: [n_articles]).
-
-    """
-    texts = utils.prepare_articles_text(articles)
-
-    inputs = tokenizer(
-        texts,
-        padding=True,
-        truncation=True,
-        max_length=MAX_LENGTH,
-        return_tensors="pt",
-    )
-
-    all_probs: list[np.ndarray] = []
-    model.eval()
-    with torch.no_grad():
-        for start in range(0, len(texts), INFERENCE_BATCH_SIZE):
-            end = start + INFERENCE_BATCH_SIZE
-            batch_inputs = {k: v[start:end].to(device) for k, v in inputs.items()}
-            preds = model(**batch_inputs).logits
-            probs = torch.sigmoid(preds[:, 1]).cpu().numpy()
-            all_probs.extend(probs)
-
-    return np.array(all_probs)
-
-
 async def _run_relevance_inference(
     encoder: torch.nn.Module,
     tokenizer: PreTrainedTokenizerBase,
@@ -205,6 +171,23 @@ async def _run_relevance_inference(
 ) -> np.ndarray:
     """Run held-out relevance inference with the embedding-linear backend."""
     return await relevance_embedding.predict_probabilities(
+        articles,
+        tokenizer,
+        encoder,
+        classifier,
+        device,
+    )
+
+
+async def _run_urgency_inference(
+    encoder: torch.nn.Module,
+    tokenizer: PreTrainedTokenizerBase,
+    classifier: LogisticRegression,
+    articles: list[Article],
+    device: torch.device,
+) -> np.ndarray:
+    """Run held-out urgency inference with the embedding-linear backend."""
+    return await urgency_embedding.predict_probabilities(
         articles,
         tokenizer,
         encoder,
@@ -320,10 +303,8 @@ async def eval_relevance(device: torch.device) -> None:
 async def eval_urgency(device: torch.device) -> None:
     """Evaluate the urgency model accuracy.
 
-    Trains on ALL tagged articles (read + unread) with the same smart
-    class-balancing as production, but holds out some read tagged articles
-    for evaluation. Only read articles have verified labels (the user has
-    confirmed or corrected the urgency tag), so they form the eval set.
+    Trains on read-tagged urgency articles only and holds out a stratified
+    subset of those trusted labels for evaluation.
 
     The eval model is discarded after metrics are computed.
     """
@@ -332,143 +313,84 @@ async def eval_urgency(device: torch.device) -> None:
 
     start_time = time.time()
 
-    # Fetch all tagged articles (read + unread).
-    labeled_data = await dr.get_articles_with_simplified_time_sensitivity()
+    labeled_data = await dr.get_read_articles_with_urgency_tags()
 
     if not labeled_data:
         logger.warning("[Urgency] No tagged articles found. Skipping eval.")
         return
 
-    # Separate read articles (verified labels) from the rest.
-    read_data = [
-        (article, label) for article, label in labeled_data if article.status == "read"
-    ]
-    non_read_data = [
-        (article, label) for article, label in labeled_data if article.status != "read"
-    ]
+    logger.info(f"[Urgency] Total read-tagged articles: {len(labeled_data)}.")
 
-    logger.info(
-        f"[Urgency] Total tagged: {len(labeled_data)} "
-        f"({len(read_data)} read, {len(non_read_data)} unread)."
-    )
-
-    if len(read_data) < validation_size * 2:
+    if len(labeled_data) <= validation_size:
         logger.warning(
-            f"[Urgency] Not enough read articles ({len(read_data)}) "
+            f"[Urgency] Not enough read-tagged articles ({len(labeled_data)}) "
             f"to hold out {validation_size}. Skipping eval."
         )
         return
 
-    # Randomly sample VALIDATION_SIZE read articles for evaluation.
-    eval_data = random.sample(read_data, validation_size)
-    eval_ids = {a.article_id for a, _ in eval_data}
-    remaining_read_data = [
-        (article, label)
-        for article, label in read_data
-        if article.article_id not in eval_ids
-    ]
+    articles = [article for article, _ in labeled_data]
+    labels = np.asarray([label for _, label in labeled_data], dtype=int)
+    label_counts = np.bincount(labels, minlength=2)
+    if validation_size < 2 or int(label_counts.min()) < 2:
+        logger.warning(
+            "[Urgency] Not enough examples per class to build a stratified eval split. "
+            "Skipping eval."
+        )
+        return
 
-    eval_articles = [a for a, _ in eval_data]
-    eval_labels = [label for _, label in eval_data]
+    train_articles, eval_articles, train_labels, eval_labels = train_test_split(
+        articles,
+        labels,
+        test_size=validation_size,
+        random_state=42,
+        stratify=labels,
+    )
 
-    eval_urgent = sum(eval_labels)
-    eval_evergreen = len(eval_labels) - eval_urgent
+    train_articles = list(train_articles)
+    eval_articles = list(eval_articles)
+    train_labels = np.asarray(train_labels, dtype=int)
+    eval_labels = np.asarray(eval_labels, dtype=int)
+
+    eval_urgent = int(eval_labels.sum())
+    eval_evergreen = int(len(eval_labels) - eval_urgent)
     logger.info(
-        f"[Urgency] Eval set: {len(eval_data)} read articles "
+        f"[Urgency] Eval set: {len(eval_articles)} read-tagged articles "
         f"({eval_urgent} urgent, {eval_evergreen} evergreen)."
     )
-
-    # Training data: remaining read + all unread.
-    train_data = remaining_read_data + non_read_data
-
-    # Apply the same smart class-balancing as llm_learn_urgency.py lines 218-276.
-    train_articles = [a for a, _ in train_data]
-    train_labels = [label for _, label in train_data]
-
-    read_urgent = [
-        (article, label)
-        for article, label in zip(train_articles, train_labels)
-        if label == 1 and article.status == "read"
-    ]
-    read_evergreen = [
-        (article, label)
-        for article, label in zip(train_articles, train_labels)
-        if label == 0 and article.status == "read"
-    ]
-    unread_urgent = [
-        (article, label)
-        for article, label in zip(train_articles, train_labels)
-        if label == 1 and article.status != "read"
-    ]
-    unread_evergreen = [
-        (article, label)
-        for article, label in zip(train_articles, train_labels)
-        if label == 0 and article.status != "read"
-    ]
-
-    urgent_count = len(read_urgent) + len(unread_urgent)
-    evergreen_count = len(read_evergreen) + len(unread_evergreen)
-
     logger.info(
-        f"[Urgency] Training pool: "
-        f"Read: {len(read_urgent)} urgent, {len(read_evergreen)} evergreen. "
-        f"Unread: {len(unread_urgent)} urgent, {len(unread_evergreen)} evergreen."
-    )
-
-    target = min(urgent_count, evergreen_count)
-
-    def _select_class(
-        read_items: list[tuple[Article, int]],
-        unread_items: list[tuple[Article, int]],
-        target_count: int,
-    ) -> list[tuple[Article, int]]:
-        """Select articles for one class, always keeping all read articles."""
-        selected = list(read_items)
-        remaining = target_count - len(selected)
-        if remaining > 0:
-            sampled = random.sample(unread_items, min(remaining, len(unread_items)))
-            selected.extend(sampled)
-        return selected
-
-    selected_urgent = _select_class(read_urgent, unread_urgent, target)
-    selected_evergreen = _select_class(read_evergreen, unread_evergreen, target)
-
-    balanced_data = selected_urgent + selected_evergreen
-    balanced_articles = [a for a, _ in balanced_data]
-    balanced_labels = [label for _, label in balanced_data]
-
-    actual_urgent = sum(balanced_labels)
-    actual_evergreen = len(balanced_labels) - actual_urgent
-    logger.info(
-        f"[Urgency] Balanced training set: {actual_urgent} urgent, "
-        f"{actual_evergreen} evergreen ({len(balanced_labels)} total)."
+        f"[Urgency] Training set: {len(train_articles)} read-tagged articles "
+        f"({int(train_labels.sum())} urgent, "
+        f"{int(len(train_labels) - train_labels.sum())} evergreen)."
     )
 
     # Train on a temp path.
     model_path = f"models/{EVAL_URGENCY_PREFIX}"
 
-    tokenizer = AutoTokenizer.from_pretrained(llm_learn_urgency.MODEL_NAME)
-
     try:
-        trainer = await llm_learn_urgency.train_model(
-            model_path, tokenizer, balanced_articles, balanced_labels
+        encoder, tokenizer, classifier = await llm_learn_urgency.train_model(
+            model_path,
+            train_articles,
+            train_labels,
+            device,
         )
-        assert trainer.model is not None, "Trainer model is None after training"
-        model = trainer.model
         logger.info("[Urgency] Eval model trained successfully.")
 
         # Run inference on held-out read articles.
-        model.to(device)  # type: ignore[operator]
-        eval_probs = _run_inference(model, tokenizer, eval_articles, device)
-        true_labels = np.array(eval_labels)
+        eval_probs = await _run_urgency_inference(
+            encoder,
+            tokenizer,
+            classifier,
+            eval_articles,
+            device,
+        )
 
-        metrics = compute_and_log_metrics("Urgency", true_labels, eval_probs)
+        metrics = compute_and_log_metrics("Urgency", eval_labels, eval_probs)
 
         save_eval_results(
             model_name="Urgency",
             training_counts={
-                "urgent": actual_urgent,
-                "evergreen": actual_evergreen,
+                "urgent": int(train_labels.sum()),
+                "evergreen": int(len(train_labels) - train_labels.sum()),
             },
             eval_counts={"urgent": eval_urgent, "evergreen": eval_evergreen},
             metrics=metrics,

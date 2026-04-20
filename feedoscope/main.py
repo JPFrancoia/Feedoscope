@@ -12,7 +12,7 @@ from feedoscope.utils import clean_title
 logger = logging.getLogger(__name__)
 
 # Half-life boundaries (in days) for the urgency-based decay.
-# The distilled ModernBERT urgency model produces a probability (0.0 to 1.0):
+# The urgency embedding backend produces a probability (0.0 to 1.0):
 #   urgency_prob = 0.0 → evergreen content, half-life of 365 days
 #   urgency_prob = 1.0 → urgent/ephemeral content, half-life of 10 days
 HALF_LIFE_EVERGREEN = 365
@@ -39,7 +39,7 @@ def compute_decay_rate(urgency_prob: float) -> float:
     score=2 half-life of 183 days).
 
     Args:
-        urgency_prob: Probability of urgency from the distilled model (0.0 to 1.0).
+        urgency_prob: Probability of urgency from the current urgency backend (0.0 to 1.0).
 
     Returns:
         The exponential decay rate constant.
@@ -78,108 +78,92 @@ def decay_relevance_score(
 
 async def main() -> None:
     await dr.global_pool.open(wait=True)
+    try:
+        # Step 1: Build the active article set once. Urgency refresh must mirror
+        # relevance refresh exactly, so both backends operate on this same list.
+        articles = await llm_infer_urgency.get_articles_for_refresh(
+            number_of_days=LOOKBACK_DAYS,
+            max_age_in_days=MAX_LOOKBACK_DAYS_SAMPLING,
+            sampling=SAMPLING,
+        )
+        logger.info(f"Total articles to be scored: {len(articles)}")
 
-    # Step 1: Run urgency inference on articles not yet cached in DB.
-    # This uses the distilled ModernBERT urgency model and writes results
-    # to the urgency_inference table.
-    logger.info("Starting urgency inference for uncached articles...")
-    urgency_articles = await dr.get_articles_wo_urgency_inference(
-        number_of_days=LOOKBACK_DAYS
-    )
-    logger.info(
-        f"Fetched {len(urgency_articles)} articles without urgency inference "
-        f"from the last {LOOKBACK_DAYS} days."
-    )
-    if urgency_articles:
-        urgency_results = await llm_infer_urgency.infer(urgency_articles)
-        await dr.register_urgency_inference(urgency_results)
+        if not articles:
+            logger.info("No articles to score. Exiting.")
+            return
+
+        # Remove past scores and time sensitivity from titles.
+        # This should be done in llm_infer.infer as well, but better safe than sorry.
+        for art in articles:
+            art.title = clean_title(art.title)
+
+        start_time = time.time()
+
+        # Step 2: Refresh urgency scores for the same active article set.
+        logger.info("Starting urgency inference for the active article set...")
+        urgency_results = await llm_infer_urgency.infer(articles)
+        await dr.register_urgency_inference(
+            urgency_results,
+            model_key=llm_infer_urgency.get_active_model_key(),
+        )
         logger.info(
             f"Cached urgency scores for {len(urgency_results.article_ids)} articles."
         )
-    else:
-        logger.info("No articles need urgency inference.")
 
-    # Step 2: Get articles that need relevance scoring.
-    # Recent unread + sampled old-ish unread articles.
-    articles = await dr.get_previous_days_unread_articles(number_of_days=LOOKBACK_DAYS)
-    logger.info(
-        f"Fetched {len(articles)} unread articles from the last {LOOKBACK_DAYS} days."
-    )
+        # Step 3: Run relevance inference.
+        logger.info("Starting inference for relevance scores...")
+        relevance_scores = await llm_infer.infer(articles)
 
-    old_articles = await dr.get_old_unread_articles(
-        age_in_days=LOOKBACK_DAYS,
-        max_age_in_days=MAX_LOOKBACK_DAYS_SAMPLING,
-        sampling=SAMPLING,
-    )
-    logger.info(
-        f"Fetched {len(old_articles)} old unread articles between "
-        f"{LOOKBACK_DAYS} and {MAX_LOOKBACK_DAYS_SAMPLING} days."
-    )
+        # Step 4: Fetch the refreshed urgency scores for decay calculation.
+        article_ids = [article.article_id for article in articles]
+        urgency_scores = await dr.get_urgency_scores_for_articles(
+            article_ids,
+            model_key=llm_infer_urgency.get_active_model_key(),
+        )
+        logger.info(
+            f"Found refreshed urgency scores for {len(urgency_scores)}/{len(articles)} articles."
+        )
 
-    articles.extend(old_articles)
+        # Step 5: Apply time-decay using urgency probabilities.
+        for idx in range(len(articles)):
+            assert articles[idx].article_id == relevance_scores.article_ids[idx]
 
-    logger.info(f"Total articles to be scored: {len(articles)}")
+            urgency_prob = urgency_scores.get(articles[idx].article_id)
+            if urgency_prob is None:
+                decayed_score = relevance_scores.scores[idx]
+                logger.warning(
+                    f"Article {articles[idx].article_id} has no refreshed urgency score. "
+                    "Skipping decay."
+                )
+            else:
+                decayed_score = decay_relevance_score(
+                    original_score=relevance_scores.scores[idx],
+                    date_entered=articles[idx].date_entered,
+                    urgency_prob=urgency_prob,
+                )
 
-    # Remove past scores and time sensitivity from titles.
-    # This should be done in llm_infer.infer as well, but better safe than sorry
-    for art in articles:
-        art.title = clean_title(art.title)
+            relevance_scores.scores[idx] = decayed_score
 
-    start_time = time.time()
+        inference_time = time.time() - start_time
+        logger.info(
+            f"Inference completed in {inference_time:.2f} seconds "
+            f"for {len(articles)} articles."
+        )
 
-    # Step 3: Run relevance inference.
-    logger.info("Starting inference for relevance scores...")
-    relevance_scores = await llm_infer.infer(articles)
+        # Step 6: Write final decayed scores to DB.
+        await dr.update_scores(
+            article_ids=relevance_scores.article_ids,
+            article_titles=relevance_scores.article_titles,
+            scores=relevance_scores.scores,
+        )
 
-    # Step 4: Fetch cached urgency scores for all articles.
-    article_ids = [a.article_id for a in articles]
-    urgency_scores = await dr.get_urgency_scores_for_articles(article_ids)
-    logger.info(
-        f"Found cached urgency scores for {len(urgency_scores)}/{len(articles)} articles."
-    )
-
-    # Step 5: Apply time-decay using urgency probabilities.
-    for idx in range(len(articles)):
-        # Make sure the order of the articles is the same.
-        assert articles[idx].article_id == relevance_scores.article_ids[idx]
-
-        urgency_prob = urgency_scores.get(articles[idx].article_id)
-
-        if urgency_prob is None:
-            # No cached urgency score — use raw relevance score without decay.
-            # Default to evergreen (0.0) so articles aren't penalized unfairly.
-            decayed_score = relevance_scores.scores[idx]
-            logger.warning(
-                f"Article {articles[idx].article_id} has no urgency score. "
-                "Skipping decay."
-            )
-        else:
-            decayed_score = decay_relevance_score(
-                original_score=relevance_scores.scores[idx],
-                date_entered=articles[idx].date_entered,
-                urgency_prob=urgency_prob,
-            )
-
-        relevance_scores.scores[idx] = decayed_score
-
-    inference_time = time.time() - start_time
-    logger.info(
-        f"Inference completed in {inference_time:.2f} seconds "
-        f"for {len(articles)} articles."
-    )
-
-    # Step 6: Write final decayed scores to DB.
-    await dr.update_scores(
-        article_ids=relevance_scores.article_ids,
-        article_titles=relevance_scores.article_titles,
-        scores=relevance_scores.scores,
-    )
-
-    db_write_time = time.time() - inference_time - start_time
-    logger.debug(
-        f"Scores updated in the database for {len(relevance_scores.article_ids)} "
-        f"articles in {db_write_time:.2f} seconds."
-    )
+        db_write_time = time.time() - inference_time - start_time
+        logger.debug(
+            f"Scores updated in the database for {len(relevance_scores.article_ids)} "
+            f"articles in {db_write_time:.2f} seconds."
+        )
+    finally:
+        await dr.global_pool.close()
 
 
 if __name__ == "__main__":

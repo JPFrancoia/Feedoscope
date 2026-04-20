@@ -185,6 +185,29 @@ async def get_sample_not_good(validation_size: int) -> list[Article]:
     return [Article(**article) for article in data]
 
 
+async def get_read_articles_with_urgency_tags() -> list[tuple[Article, int]]:
+    """Get read articles labeled with trusted Miniflux urgency tags.
+
+    Returns:
+        List of ``(Article, urgency_label)`` tuples sourced only from read
+        articles tagged ``0-urgency`` or ``1-urgency``.
+
+    """
+    query = _get_query_from_file("get_read_articles_with_urgency_tags.sql")
+
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(query)
+        data = await cur.fetchall()
+
+    results: list[tuple[Article, int]] = []
+    for row in data:
+        urgency_label = row.pop("urgency_label")
+        article = Article(**row)
+        results.append((article, urgency_label))
+
+    return results
+
+
 async def get_previous_days_unread_articles(number_of_days: int = 14) -> list[Article]:
     """Get unread articles from the previous X days.
 
@@ -426,14 +449,14 @@ async def register_simplified_time_sensitivity(
             await copy.write_row(row)
 
 
-# --- Training data for distilled urgency model (Phase 3) ---
+# --- Read-tagged urgency training data ---
 
 
 async def get_articles_with_simplified_time_sensitivity() -> list[tuple[Article, int]]:
     """Get all articles with their simplified time sensitivity labels.
 
-    Used for training the distilled urgency ModernBERT model. Returns article
-    data joined with the binary urgency label (0 or 1).
+    Legacy helper for the old urgency-training path. Returns article data joined
+    with the binary urgency label (0 or 1).
 
     Returns:
         List of (Article, urgency_label) tuples.
@@ -454,16 +477,16 @@ async def get_articles_with_simplified_time_sensitivity() -> list[tuple[Article,
     return results
 
 
-# --- Urgency inference caching (Phase 4: distilled model) ---
+# --- Urgency inference caching ---
 
 
 async def get_articles_wo_urgency_inference(
     number_of_days: int = 14,
+    model_key: str = "legacy-modernbert",
 ) -> list[Article]:
-    """Get recent unread articles without a cached urgency inference score.
+    """Get recent unread articles without a cached urgency score.
 
-    Only processes articles that haven't been scored yet by the distilled
-    urgency model. Used by llm_infer_urgency.py.
+    Legacy helper for callers that only want cache misses for one model key.
 
     Args:
         number_of_days: Number of days to look back for unread articles.
@@ -475,7 +498,13 @@ async def get_articles_wo_urgency_inference(
     query = _get_query_from_file("get_articles_wo_urgency_inference.sql")
 
     async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.execute(query, {"number_of_days": number_of_days})
+        await cur.execute(
+            query,
+            {
+                "number_of_days": number_of_days,
+                "model_key": model_key,
+            },
+        )
         data = await cur.fetchall()
 
     return [Article(**article) for article in data]
@@ -483,26 +512,37 @@ async def get_articles_wo_urgency_inference(
 
 async def register_urgency_inference(
     results: UrgencyInferenceResults,
+    model_key: str,
 ) -> None:
-    """Bulk insert urgency inference scores via COPY.
+    """Insert or update urgency inference scores for one active model.
 
     Args:
         results: Urgency inference results containing article IDs and scores.
+        model_key: Cache key for the active urgency model.
 
     """
     query = _get_query_from_file("register_urgency_inference.sql")
 
-    async with (
-        global_pool.connection() as conn,
-        conn.cursor() as cur,
-        cur.copy(query) as copy,
-    ):
-        for article_id, score in zip(results.article_ids, results.urgency_scores):
-            await copy.write_row((article_id, score))
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.executemany(
+            query,
+            [
+                {
+                    "article_id": article_id,
+                    "model_key": model_key,
+                    "urgency_score": score,
+                }
+                for article_id, score in zip(
+                    results.article_ids,
+                    results.urgency_scores,
+                )
+            ],
+        )
 
 
 async def get_urgency_scores_for_articles(
     article_ids: list[int],
+    model_key: str,
 ) -> dict[int, float]:
     """Fetch cached urgency scores for a set of articles.
 
@@ -516,10 +556,19 @@ async def get_urgency_scores_for_articles(
         Articles without a cached score are not included.
 
     """
+    if not article_ids:
+        return {}
+
     query = _get_query_from_file("get_urgency_scores_for_articles.sql")
 
     async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.execute(query, {"article_ids": article_ids})
+        await cur.execute(
+            query,
+            {
+                "article_ids": article_ids,
+                "model_key": model_key,
+            },
+        )
         data = await cur.fetchall()
 
     return {row["article_id"]: row["urgency_score"] for row in data}
@@ -529,29 +578,25 @@ async def get_urgency_scores_for_articles(
 #
 # Tagging system overview:
 #
-# The pipeline assigns Miniflux user tags "0-urgency" (evergreen) and
-# "1-urgency" (time-sensitive) to articles. These tags serve two purposes:
+# Miniflux user tags "0-urgency" (evergreen) and "1-urgency" (time-sensitive)
+# are the trusted supervision signal for the urgency model.
 #
-# 1. VISIBILITY: The user can see in Miniflux which urgency class the LLM
-#    assigned to each article.
+# 1. VISIBILITY: The user can see the current urgency label in Miniflux.
 #
-# 2. TRAINING LABELS: The training query (get_articles_with_simplified_time_
-#    sensitivity.sql) reads the tag value as the ground-truth label for the
-#    distilled ModernBERT urgency model.
+# 2. TRAINING LABELS: Read articles tagged with these values are used as the
+#    ground-truth labels for urgency training.
 #
 # Manual corrections:
 #   The user can manually change an article's tag in Miniflux (e.g. switch
-#   "0-urgency" to "1-urgency") to correct an LLM misclassification. The
-#   pipeline will NEVER overwrite an existing urgency tag — if an article
-#   already has either "0-urgency" or "1-urgency", the tag assignment is
-#   skipped entirely (see set_urgency_user_tag_for_entry.sql). This means
-#   manual corrections are always preserved across pipeline re-runs.
+#   "0-urgency" to "1-urgency"). The legacy auto-tagging helper below will
+#   never overwrite an existing urgency tag, so manual corrections are always
+#   preserved.
 #
 # Tag lifecycle:
-#   - Created by: make time_simple (LLM labels new articles and assigns tags)
-#   - Read by:    make train_urgency (training query uses tags as labels)
-#   - Modified by: user manually in Miniflux (to correct misclassifications)
-#   - Never overwritten by: the pipeline (INSERT-only, no DELETE)
+#   - Created by: user labeling in Miniflux, or legacy bootstrap scripts
+#   - Read by: make train_urgency
+#   - Modified by: user manually in Miniflux
+#   - Never overwritten by: the legacy tag-assignment helper below
 
 
 async def ensure_urgency_user_tags() -> dict[str, int]:
@@ -561,9 +606,9 @@ async def ensure_urgency_user_tags() -> dict[str, int]:
     user_tags table for user_id=1, if they don't already exist. Then
     fetches and returns their database IDs.
 
-    These tags are assigned to articles by the simplified time sensitivity
-    pipeline (make time_simple) and used as training labels by the distilled
-    urgency model (make train_urgency).
+    These tags are used as training labels by the urgency model. The helper is
+    still safe to call from legacy bootstrap workflows because it only inserts
+    missing tags and never overwrites an existing manual label.
 
     Returns:
         Dict mapping tag title to tag ID, e.g.

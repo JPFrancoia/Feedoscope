@@ -6,4 +6,5 @@ select
 from
     urgency_inference
 where
-    article_id = any(%(article_ids)s);
+    article_id = any(%(article_ids)s)
+    and model_key = %(model_key)s;

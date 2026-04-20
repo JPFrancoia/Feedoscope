@@ -67,7 +67,7 @@ class SimplifiedTimeSensitivity(BaseModel):
 
 
 class UrgencyInferenceResults(BaseModel):
-    """Results from the distilled ModernBERT urgency model.
+    """Results from the embedding-linear urgency model.
 
     urgency_scores are probabilities of the "urgent" class (0.0 to 1.0),
     used for continuous time-decay calculation.

@@ -1,5 +1,5 @@
--- Get recent unread articles that don't yet have a cached urgency inference score.
--- Used by the distilled ModernBERT urgency model to infer only new articles.
+-- Get recent unread articles that don't yet have a cached urgency inference score
+-- for the active urgency model key.
 select
     e.id as article_id,
     e.title,
@@ -26,6 +26,7 @@ where
     and not exists (
         select 1 from urgency_inference ui
         where ui.article_id = e.id
+          and ui.model_key = %(model_key)s
     )
 order by
     e.id asc;
