@@ -111,7 +111,10 @@ async def train_model(
         Loaded encoder, tokenizer, and trained classifier.
 
     """
-    tokenizer, encoder = relevance_embedding.load_encoder(device)
+    tokenizer, encoder = relevance_embedding.load_encoder(
+        device,
+        pipeline_label="urgency",
+    )
     train_counts = {
         "urgent": int(labels.sum()),
         "evergreen": int(len(labels) - labels.sum()),
@@ -126,6 +129,7 @@ async def train_model(
         tokenizer,
         encoder,
         device,
+        pipeline_label="urgency",
     )
     classifier = urgency_embedding.fit_classifier(embeddings, labels)
     urgency_embedding.save_artifact(model_path, classifier, train_counts=train_counts)
@@ -184,7 +188,10 @@ async def main() -> None:
 
         if os.path.exists(model_path):
             logger.info(f"Loading embedding artifact from {model_path}")
-            tokenizer, encoder = relevance_embedding.load_encoder(device)
+            tokenizer, encoder = relevance_embedding.load_encoder(
+                device,
+                pipeline_label="urgency",
+            )
             classifier = urgency_embedding.load_classifier(model_path)
         else:
             logger.info("Training new embedding-linear urgency backend...")

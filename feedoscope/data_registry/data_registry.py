@@ -521,7 +521,15 @@ async def register_urgency_inference(
         model_key: Cache key for the active urgency model.
 
     """
+    if not results.article_ids:
+        logger.info(f"No urgency scores to cache for model_key={model_key}.")
+        return
+
     query = _get_query_from_file("register_urgency_inference.sql")
+
+    logger.info(
+        f"Upserting {len(results.article_ids)} urgency scores for model_key={model_key}."
+    )
 
     async with global_pool.connection() as conn, conn.cursor() as cur:
         await cur.executemany(
@@ -538,6 +546,9 @@ async def register_urgency_inference(
                 )
             ],
         )
+    logger.info(
+        f"Upserted {len(results.article_ids)} urgency scores for model_key={model_key}."
+    )
 
 
 async def get_urgency_scores_for_articles(

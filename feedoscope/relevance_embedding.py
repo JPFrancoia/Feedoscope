@@ -24,6 +24,16 @@ ENCODER_CACHE_ROOT = Path("models/relevance_encoder")
 ENCODER_READY_FILENAME = ".snapshot_complete"
 
 
+def _pipeline_name(pipeline_label: str) -> str:
+    """Normalize pipeline labels for human-readable logging."""
+    return pipeline_label.replace("_", " ")
+
+
+def _pipeline_title(pipeline_label: str) -> str:
+    """Return a capitalized pipeline label for log messages."""
+    return _pipeline_name(pipeline_label).capitalize()
+
+
 def get_encoder_cache_path() -> Path:
     """Return the shared on-disk cache path for the configured encoder."""
     return ENCODER_CACHE_ROOT / config.RELEVANCE_MODEL_NAME.replace("/", "--")
@@ -48,19 +58,21 @@ def has_local_encoder_snapshot(encoder_path: Path) -> bool:
     return has_config and has_tokenizer and has_weights
 
 
-def ensure_local_encoder() -> str:
+def ensure_local_encoder(pipeline_label: str = "relevance") -> str:
     """Download the shared encoder snapshot once and reuse it afterward."""
     encoder_path = get_encoder_cache_path()
     ready_marker = encoder_path / ENCODER_READY_FILENAME
+    pipeline_name = _pipeline_name(pipeline_label)
+    pipeline_title = _pipeline_title(pipeline_label)
 
     if ready_marker.exists() or has_local_encoder_snapshot(encoder_path):
         if not ready_marker.exists():
             ready_marker.write_text("\n")
-        logger.info(f"Using cached relevance encoder at {encoder_path}")
+        logger.info(f"Using cached {pipeline_name} embedding encoder at {encoder_path}")
         return str(encoder_path)
 
     logger.info(
-        f"Downloading relevance encoder {config.RELEVANCE_MODEL_NAME} to "
+        f"Downloading {pipeline_name} embedding encoder {config.RELEVANCE_MODEL_NAME} to "
         f"{encoder_path}"
     )
     encoder_path.mkdir(parents=True, exist_ok=True)
@@ -71,21 +83,24 @@ def ensure_local_encoder() -> str:
         )
     except GatedRepoError as exc:
         raise RuntimeError(
-            "Cannot download the gated relevance encoder. Populate the shared "
+            f"Cannot download the gated {pipeline_name} embedding encoder. Populate the shared "
             f"cache at {encoder_path} from an authenticated machine or provide "
-            "Hugging Face credentials before running relevance training or inference."
+            f"Hugging Face credentials before running {pipeline_name} training or inference."
         ) from exc
     ready_marker.write_text("\n")
-    logger.info(f"Relevance encoder cached at {encoder_path}")
+    logger.info(f"{pipeline_title} embedding encoder cached at {encoder_path}")
     return str(encoder_path)
 
 
 def load_encoder(
     device: torch.device,
+    pipeline_label: str = "relevance",
 ) -> tuple[PreTrainedTokenizerBase, torch.nn.Module]:
     """Load the shared embedding tokenizer and encoder onto the target device."""
-    encoder_path = ensure_local_encoder()
-    logger.info(f"Loading relevance encoder from {encoder_path}")
+    pipeline_name = _pipeline_name(pipeline_label)
+    pipeline_title = _pipeline_title(pipeline_label)
+    encoder_path = ensure_local_encoder(pipeline_label=pipeline_label)
+    logger.info(f"Loading {pipeline_name} embedding encoder from {encoder_path}")
     tokenizer = AutoTokenizer.from_pretrained(
         encoder_path,
         trust_remote_code=True,
@@ -98,7 +113,7 @@ def load_encoder(
     )
     model.to(device)
     model.eval()
-    logger.info("Relevance encoder loaded successfully")
+    logger.info(f"{pipeline_title} embedding encoder loaded successfully")
     return tokenizer, model
 
 
@@ -128,10 +143,12 @@ def hash_prepared_text(text: str) -> str:
 def prepare_articles_text(
     articles: list[Article],
     tokenizer: PreTrainedTokenizerBase,
+    pipeline_label: str = "relevance",
 ) -> list[str]:
     """Prepare article text once before cache lookup or encoding."""
+    pipeline_name = _pipeline_name(pipeline_label)
     logger.info(
-        f"Preparing relevance text for {len(articles)} articles using "
+        f"Preparing {pipeline_name} text for {len(articles)} articles using "
         f"{config.RELEVANCE_TEXT_PREP_MODE}"
     )
     texts = relevance_text.prepare_articles_text(
@@ -140,7 +157,7 @@ def prepare_articles_text(
         max_length=config.RELEVANCE_MAX_LENGTH,
         mode=config.RELEVANCE_TEXT_PREP_MODE,
     )
-    logger.info(f"Prepared relevance text for {len(texts)} articles")
+    logger.info(f"Prepared {pipeline_name} text for {len(texts)} articles")
     return texts
 
 
@@ -160,12 +177,17 @@ async def encode_articles(
     tokenizer: PreTrainedTokenizerBase,
     model: torch.nn.Module,
     device: torch.device,
+    pipeline_label: str = "relevance",
 ) -> np.ndarray:
     """Prepare article text, reuse cached vectors, and encode only misses."""
     if not articles:
         return np.empty((0, get_encoder_output_dim(model)), dtype=np.float32)
 
-    texts = prepare_articles_text(articles, tokenizer)
+    texts = prepare_articles_text(
+        articles,
+        tokenizer,
+        pipeline_label=pipeline_label,
+    )
     text_hashes = [hash_prepared_text(text) for text in texts]
     article_ids = [article.article_id for article in articles]
     cache_config = get_cache_config()
@@ -204,12 +226,19 @@ async def encode_articles(
         miss_texts.append(texts[index])
 
     logger.info(
-        f"Relevance embedding cache: {hits} hits, {len(miss_indices)} misses"
+        f"{_pipeline_title(pipeline_label)} embedding cache: "
+        f"{hits} hits, {len(miss_indices)} misses"
         + (f" ({stale} stale)" if stale else "")
     )
 
     if miss_texts:
-        fresh_embeddings = encode_texts(miss_texts, tokenizer, model, device)
+        fresh_embeddings = encode_texts(
+            miss_texts,
+            tokenizer,
+            model,
+            device,
+            pipeline_label=pipeline_label,
+        )
         upsert_rows: list[tuple[int, str, np.ndarray]] = []
 
         for offset, index in enumerate(miss_indices):
@@ -236,6 +265,7 @@ def encode_texts(
     tokenizer: PreTrainedTokenizerBase,
     model: torch.nn.Module,
     device: torch.device,
+    pipeline_label: str = "relevance",
 ) -> np.ndarray:
     """Encode raw text batches into normalized dense vectors."""
     if not texts:
@@ -243,6 +273,7 @@ def encode_texts(
 
     embeddings: list[np.ndarray] = []
     total_batches = math.ceil(len(texts) / config.RELEVANCE_ENCODER_BATCH_SIZE)
+    pipeline_name = _pipeline_name(pipeline_label)
 
     with torch.no_grad():
         for batch_index, start in enumerate(
@@ -250,7 +281,7 @@ def encode_texts(
             start=1,
         ):
             batch = texts[start : start + config.RELEVANCE_ENCODER_BATCH_SIZE]
-            logger.info(f"Encoding batch {batch_index}/{total_batches}")
+            logger.info(f"Encoding {pipeline_name} batch {batch_index}/{total_batches}")
             inputs = tokenizer(
                 batch,
                 padding=True,
@@ -282,10 +313,12 @@ def fit_classifier(
     embeddings: np.ndarray,
     labels: np.ndarray,
     sample_weights: np.ndarray,
+    pipeline_label: str = "relevance",
 ) -> LogisticRegression:
     """Fit the logistic-regression head on top of frozen embeddings."""
+    pipeline_name = _pipeline_name(pipeline_label)
     logger.info(
-        f"Fitting logistic regression on {len(labels)} rows with "
+        f"Fitting {pipeline_name} logistic regression on {len(labels)} rows with "
         f"C={config.RELEVANCE_LINEAR_C}"
     )
     classifier = LogisticRegression(
@@ -294,7 +327,7 @@ def fit_classifier(
         random_state=42,
     )
     classifier.fit(embeddings, labels, sample_weight=sample_weights)
-    logger.info("Logistic regression fit completed")
+    logger.info(f"{_pipeline_title(pipeline_label)} logistic regression fit completed")
     return classifier
 
 
@@ -302,9 +335,11 @@ def save_artifact(
     model_path: str,
     classifier: LogisticRegression,
     train_counts: dict[str, int],
+    pipeline_label: str = "relevance",
 ) -> None:
     """Persist the classifier and minimal metadata for later inference."""
-    logger.info(f"Saving relevance artifact to {model_path}")
+    pipeline_name = _pipeline_name(pipeline_label)
+    logger.info(f"Saving {pipeline_name} artifact to {model_path}")
     path = Path(model_path)
     path.mkdir(parents=True, exist_ok=True)
 
@@ -321,12 +356,17 @@ def save_artifact(
         "train_counts": train_counts,
     }
     (path / METADATA_FILENAME).write_text(json.dumps(metadata, indent=2) + "\n")
-    logger.info(f"Saved relevance artifact to {model_path}")
+    logger.info(f"Saved {pipeline_name} artifact to {model_path}")
 
 
-def load_classifier(model_path: str) -> LogisticRegression:
+def load_classifier(
+    model_path: str,
+    pipeline_label: str = "relevance",
+) -> LogisticRegression:
     """Load a previously saved logistic-regression classifier."""
-    logger.info(f"Loading relevance classifier from {model_path}")
+    logger.info(
+        f"Loading {_pipeline_name(pipeline_label)} classifier from {model_path}"
+    )
     return joblib.load(Path(model_path) / CLASSIFIER_FILENAME)
 
 
@@ -336,12 +376,19 @@ async def predict_probabilities(
     model: torch.nn.Module,
     classifier: LogisticRegression,
     device: torch.device,
+    pipeline_label: str = "relevance",
 ) -> np.ndarray:
     """Predict positive-class probabilities for a batch of articles."""
     if not articles:
         return np.array([], dtype=float)
 
-    embeddings = await encode_articles(articles, tokenizer, model, device)
+    embeddings = await encode_articles(
+        articles,
+        tokenizer,
+        model,
+        device,
+        pipeline_label=pipeline_label,
+    )
     probs = classifier.predict_proba(embeddings)[:, 1]
     return np.clip(probs, 1e-7, 1 - 1e-7)
 

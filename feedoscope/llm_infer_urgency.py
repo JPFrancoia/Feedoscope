@@ -76,7 +76,10 @@ async def infer(articles: list[Article]) -> UrgencyInferenceResults:
 
     logger.info(f"Loading embedding-linear urgency artifact from {model_path}")
     classifier = urgency_embedding.load_classifier(model_path)
-    tokenizer, encoder = relevance_embedding.load_encoder(device)
+    tokenizer, encoder = relevance_embedding.load_encoder(
+        device,
+        pipeline_label="urgency",
+    )
     probs = await urgency_embedding.predict_probabilities(
         articles,
         tokenizer,
@@ -101,6 +104,8 @@ async def main(
     """Refresh urgency for the same unread article set scored by relevance."""
     await dr.global_pool.open(wait=True)
     try:
+        model_key = get_active_model_key()
+        logger.info(f"Active urgency model key: {model_key}")
         articles = await get_articles_for_refresh(
             number_of_days=number_of_days,
             max_age_in_days=max_age_in_days,
@@ -121,8 +126,11 @@ async def main(
             f"for {len(articles)} articles."
         )
 
-        await dr.register_urgency_inference(results, model_key=get_active_model_key())
-        logger.info(f"Cached urgency scores for {len(results.article_ids)} articles.")
+        await dr.register_urgency_inference(results, model_key=model_key)
+        logger.info(
+            f"Cached urgency scores for {len(results.article_ids)} articles "
+            f"with model_key={model_key}."
+        )
     finally:
         await dr.global_pool.close()
 

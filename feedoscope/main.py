@@ -79,6 +79,9 @@ def decay_relevance_score(
 async def main() -> None:
     await dr.global_pool.open(wait=True)
     try:
+        urgency_model_key = llm_infer_urgency.get_active_model_key()
+        logger.info(f"Active urgency model key: {urgency_model_key}")
+
         # Step 1: Build the active article set once. Urgency refresh must mirror
         # relevance refresh exactly, so both backends operate on this same list.
         articles = await llm_infer_urgency.get_articles_for_refresh(
@@ -101,24 +104,34 @@ async def main() -> None:
 
         # Step 2: Refresh urgency scores for the same active article set.
         logger.info("Starting urgency inference for the active article set...")
+        urgency_start = time.time()
         urgency_results = await llm_infer_urgency.infer(articles)
         await dr.register_urgency_inference(
             urgency_results,
-            model_key=llm_infer_urgency.get_active_model_key(),
+            model_key=urgency_model_key,
         )
+        urgency_elapsed = time.time() - urgency_start
         logger.info(
-            f"Cached urgency scores for {len(urgency_results.article_ids)} articles."
+            f"Urgency refresh completed in {urgency_elapsed:.2f} seconds for "
+            f"{len(urgency_results.article_ids)} articles with "
+            f"model_key={urgency_model_key}."
         )
 
         # Step 3: Run relevance inference.
         logger.info("Starting inference for relevance scores...")
+        relevance_start = time.time()
         relevance_scores = await llm_infer.infer(articles)
+        relevance_elapsed = time.time() - relevance_start
+        logger.info(
+            f"Relevance inference completed in {relevance_elapsed:.2f} seconds "
+            f"for {len(relevance_scores.article_ids)} articles."
+        )
 
         # Step 4: Fetch the refreshed urgency scores for decay calculation.
         article_ids = [article.article_id for article in articles]
         urgency_scores = await dr.get_urgency_scores_for_articles(
             article_ids,
-            model_key=llm_infer_urgency.get_active_model_key(),
+            model_key=urgency_model_key,
         )
         logger.info(
             f"Found refreshed urgency scores for {len(urgency_scores)}/{len(articles)} articles."

@@ -94,7 +94,7 @@ def save_artifact(
 def load_classifier(model_path: str) -> LogisticRegression:
     """Load a previously saved urgency logistic-regression classifier."""
     logger.info(f"Loading urgency classifier from {model_path}")
-    return relevance_embedding.load_classifier(model_path)
+    return relevance_embedding.load_classifier(model_path, pipeline_label="urgency")
 
 
 async def predict_probabilities(
@@ -111,6 +111,7 @@ async def predict_probabilities(
         encoder,
         classifier,
         device,
+        pipeline_label="urgency",
     )
 
 

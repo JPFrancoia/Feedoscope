@@ -321,6 +321,9 @@ Completed in this session:
 - switched urgency inference to the shared embedding backend
 - aligned urgency refresh with the exact relevance article-selection path
 - updated urgency eval to match production
+- made shared embedding logs pipeline-aware so urgency no longer emits
+  misleading relevance-only log messages
+- added explicit urgency phase timing and `model_key` logging in the runtime path
 - updated durable docs and the docs index
 - ran `black` and `isort` on touched Python files
 - ran targeted `mypy` on touched Python files
