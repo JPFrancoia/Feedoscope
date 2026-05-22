@@ -9,3 +9,5 @@ systems.
   shared Gemma model cache, and Postgres bytea embedding cache.
 - `urgency-embedding-backend.md`: urgency training/inference on shared Gemma
   embeddings, read-tagged labels, and model-keyed urgency score caching.
+- `model-eval-history.md`: weekly eval result persistence to JSON history and
+  Miniflux-owned PostgreSQL storage.

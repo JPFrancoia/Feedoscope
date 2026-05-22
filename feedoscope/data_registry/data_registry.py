@@ -1,3 +1,4 @@
+import datetime
 from functools import lru_cache
 from importlib.resources import files
 import logging
@@ -6,6 +7,7 @@ from typing import LiteralString, cast
 import numpy as np
 from psycopg import AsyncConnection
 from psycopg.rows import DictRow, dict_row
+from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
 from feedoscope import config
@@ -277,6 +279,46 @@ async def update_scores(
                 for score, int_id in zip(scores, article_ids)
             ],
         )
+
+
+async def insert_model_eval(
+    eval_date: datetime.date,
+    model_name: str,
+    training_counts: dict[str, int],
+    eval_counts: dict[str, int],
+    metrics: dict[str, float],
+) -> None:
+    """Insert a model evaluation result.
+
+    Args:
+        eval_date: Date the evaluation ran.
+        model_name: Name of the evaluated model.
+        training_counts: Training sample counts by class.
+        eval_counts: Evaluation sample counts by class.
+        metrics: Classification metrics from the evaluation run.
+
+    """
+    query = _get_query_from_file("insert_model_eval.sql")
+
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(
+            query,
+            {
+                "eval_date": eval_date,
+                "model_name": model_name,
+                "training": Jsonb(training_counts),
+                "eval_counts": Jsonb(eval_counts),
+                "metrics_accuracy": metrics["accuracy"],
+                "metrics_precision": metrics["precision"],
+                "metrics_recall": metrics["recall"],
+                "metrics_f1": metrics["f1"],
+                "metrics_roc_auc": metrics["roc_auc"],
+                "metrics_average_precision": metrics["average_precision"],
+                "metrics_log_loss": metrics["log_loss"],
+            },
+        )
+
+    logger.info(f"Inserted {model_name} evaluation result for {eval_date}.")
 
 
 async def get_relevance_embeddings(

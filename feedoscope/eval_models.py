@@ -116,17 +116,18 @@ def compute_and_log_metrics(
     return metrics
 
 
-def save_eval_results(
+async def save_eval_results(
     model_name: str,
     training_counts: dict[str, int],
     eval_counts: dict[str, int],
     metrics: dict[str, float],
 ) -> None:
-    """Append an evaluation record to the JSON history file on disk.
+    """Persist an evaluation record to JSON history and PostgreSQL.
 
     Creates the file if it does not exist. If the file exists but is
     corrupted, it is overwritten with a fresh list containing only the
-    new record.
+    new record. The PostgreSQL insert is intentionally allowed to fail the
+    eval job, because Miniflux's ``model_evals`` table is the durable history.
 
     Args:
         model_name: Name of the model evaluated (e.g. "Relevance", "Urgency").
@@ -135,8 +136,9 @@ def save_eval_results(
         metrics: Metric name to value mapping from ``compute_and_log_metrics``.
 
     """
+    eval_date = datetime.date.today()
     record = {
-        "date": datetime.date.today().isoformat(),
+        "date": eval_date.isoformat(),
         "model": model_name,
         "training": training_counts,
         "eval": eval_counts,
@@ -160,6 +162,14 @@ def save_eval_results(
         json.dump(history, f, indent=2)
 
     logger.info(f"[{model_name}] Evaluation results saved to {EVAL_HISTORY_PATH}.")
+
+    await dr.insert_model_eval(
+        eval_date=eval_date,
+        model_name=model_name,
+        training_counts=training_counts,
+        eval_counts=eval_counts,
+        metrics=metrics,
+    )
 
 
 async def _run_relevance_inference(
@@ -284,7 +294,7 @@ async def eval_relevance(device: torch.device) -> None:
 
         metrics = compute_and_log_metrics("Relevance", true_labels, all_probs)
 
-        save_eval_results(
+        await save_eval_results(
             model_name="Relevance",
             training_counts={"good": len(good_articles), "bad": len(bad_articles)},
             eval_counts={"good": len(eval_good), "bad": len(eval_bad)},
@@ -386,7 +396,7 @@ async def eval_urgency(device: torch.device) -> None:
 
         metrics = compute_and_log_metrics("Urgency", eval_labels, eval_probs)
 
-        save_eval_results(
+        await save_eval_results(
             model_name="Urgency",
             training_counts={
                 "urgent": int(train_labels.sum()),
