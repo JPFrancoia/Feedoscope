@@ -11,13 +11,6 @@ from feedoscope.utils import clean_title
 
 logger = logging.getLogger(__name__)
 
-# Half-life boundaries (in days) for the urgency-based decay.
-# The urgency embedding backend produces a probability (0.0 to 1.0):
-#   urgency_prob = 0.0 → evergreen content, half-life of 365 days
-#   urgency_prob = 1.0 → urgent/ephemeral content, half-life of 10 days
-HALF_LIFE_EVERGREEN = 365
-HALF_LIFE_URGENT = 10
-
 # All articles that are more recent than this will be rescored at every inference run.
 LOOKBACK_DAYS = 40
 
@@ -31,12 +24,9 @@ SAMPLING = 1500
 def compute_decay_rate(urgency_prob: float) -> float:
     """Interpolate decay rate between evergreen and urgent half-lives.
 
-    We interpolate the half-life linearly between HALF_LIFE_EVERGREEN and
-    HALF_LIFE_URGENT based on the urgency probability, then compute the
+    We interpolate the half-life linearly between the configured evergreen and
+    urgent boundaries based on the urgency probability, then compute the
     exponential decay rate from that half-life.
-
-    At urgency_prob=0.5, the half-life is ~187 days (similar to the old
-    score=2 half-life of 183 days).
 
     Args:
         urgency_prob: Probability of urgency from the current urgency backend (0.0 to 1.0).
@@ -45,8 +35,8 @@ def compute_decay_rate(urgency_prob: float) -> float:
         The exponential decay rate constant.
 
     """
-    half_life = HALF_LIFE_EVERGREEN + urgency_prob * (
-        HALF_LIFE_URGENT - HALF_LIFE_EVERGREEN
+    half_life = config.HALF_LIFE_EVERGREEN + urgency_prob * (
+        config.HALF_LIFE_URGENT - config.HALF_LIFE_EVERGREEN
     )
     return math.log(2) / half_life
 

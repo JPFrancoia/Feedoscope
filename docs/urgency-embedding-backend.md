@@ -85,5 +85,12 @@ article selection used for relevance scoring:
 - a random sample of older unread articles
 
 The refreshed urgency probabilities are then used immediately for time-decay.
+The decay half-life is interpolated between two environment-backed boundaries:
+
+- `HALF_LIFE_EVERGREEN` defaults to `120` days
+- `HALF_LIFE_URGENT` defaults to `10` days
+
+Both values must be positive, and the urgent half-life cannot exceed the
+evergreen half-life.
 
 This replaces the old behavior where urgency was only inferred for cache misses.

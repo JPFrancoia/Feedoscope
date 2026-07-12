@@ -37,6 +37,13 @@ ALLOW_INFERENCE_WO_GPU = strtobool(os.getenv("ALLOW_INFERENCE_WO_GPU", "False"))
 # training so explicitly preferred articles influence the classifier more.
 EXCELLENT_WEIGHT = float(os.getenv("EXCELLENT_WEIGHT", "3.0"))
 
+# Half-life boundaries (in days) for urgency-based relevance decay.
+HALF_LIFE_EVERGREEN = float(os.getenv("HALF_LIFE_EVERGREEN", "120"))
+HALF_LIFE_URGENT = float(os.getenv("HALF_LIFE_URGENT", "10"))
+assert (
+    0 < HALF_LIFE_URGENT <= HALF_LIFE_EVERGREEN
+), "HALF_LIFE_URGENT must be positive and no greater than HALF_LIFE_EVERGREEN"
+
 # Size of the held-out validation set used by training and eval commands.
 # Production-style runs leave this at 0 to skip validation entirely.
 VALIDATION_SIZE = int(os.getenv("VALIDATION_SIZE", "0"))
