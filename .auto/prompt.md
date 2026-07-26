@@ -108,5 +108,11 @@ Do not implement same-story/newer-context reassessment in this loop. It needs a 
 
 ## What's Been Tried
 
-- Baseline candidate maps the existing urgency probability monotonically from shortest horizon to evergreen using a Gaussian distribution over ordered classes.
-- No measured experiments yet.
+- Urgency-to-horizon baseline: `rps=0.21905157`; useful evergreen signal but poor horizon predictions.
+- Normalized EmbeddingGemma multinomial logistic regression roughly halved RPS; weaker regularization helped up to `C=10`.
+- Five cumulative logistic boundaries aligned better with ordered RPS. The retained model uses `C=20`, quarter-to-three-eighths fractional class balancing, and training-only preprocessing.
+- Proper least-squares isotonic projection of crossing boundary probabilities is the current best: `rps=0.08792380`, deterministic on repeat.
+- Word/character TF-IDF, title-only text, fixed temporal phrases, parsed durations/dates, urgency, and feed identity did not improve RPS. Explicit temporal features often improved kappa but not calibration.
+- RBF SVMs, k-nearest neighbors, ExtraTrees, PCA/PLS, ridge cumulative regression, latent-score regression, L1 sparsity, bagging, and cross-validated sigmoid calibration all regressed.
+- Two-stage evergreen/mutable classification and centered-embedding blends produced sub-0.001 nominal gains but were discarded under the simplicity and anti-overfitting rule.
+- Do not resume decimal hyperparameter tuning or text-only variants. Prefer structurally different, training-only ideas and require material gains for added complexity.

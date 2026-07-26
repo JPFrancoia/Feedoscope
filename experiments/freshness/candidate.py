@@ -3,15 +3,14 @@
 import numpy as np
 from sklearn.isotonic import isotonic_regression
 from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import normalize
 
 HORIZON_COUNT = 6
 
 
 def fit_predict(train: dict[str, object], test: dict[str, object]) -> np.ndarray:
     """Fit one cumulative threshold classifier per ordered horizon boundary."""
-    x_train = normalize(np.asarray(train["embeddings"], dtype=float))
-    x_test = normalize(np.asarray(test["embeddings"], dtype=float))
+    x_train = np.asarray(train["embeddings"], dtype=float)
+    x_test = np.asarray(test["embeddings"], dtype=float)
     labels = np.asarray(train["labels"], dtype=int)
     tails = []
     for boundary in range(HORIZON_COUNT - 1):
