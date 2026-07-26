@@ -1,22 +1,19 @@
-"""Autoresearch candidate: map the existing urgency probability to horizons."""
+"""Autoresearch candidate: multinomial classification over article embeddings."""
 
 import numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import normalize
 
 HORIZON_COUNT = 6
 
 
 def fit_predict(train: dict[str, object], test: dict[str, object]) -> np.ndarray:
-    """Return one probability distribution per test article.
-
-    This baseline preserves the current production assumption: urgency 1.0 maps
-    to the shortest horizon and urgency 0.0 maps to evergreen.
-    """
-    del train
-    urgency = np.asarray(test["current_urgency_score"], dtype=float)
-    urgency = np.nan_to_num(urgency, nan=0.5).clip(0.0, 1.0)
-    centers = (1.0 - urgency) * (HORIZON_COUNT - 1)
-    classes = np.arange(HORIZON_COUNT, dtype=float)
-    logits = -0.5 * ((classes[None, :] - centers[:, None]) / 0.9) ** 2
-    logits -= logits.max(axis=1, keepdims=True)
-    probabilities = np.exp(logits)
-    return probabilities / probabilities.sum(axis=1, keepdims=True)
+    """Fit a regularized linear classifier over normalized embeddings."""
+    x_train = normalize(np.asarray(train["embeddings"], dtype=float))
+    x_test = normalize(np.asarray(test["embeddings"], dtype=float))
+    labels = np.asarray(train["labels"], dtype=int)
+    model = LogisticRegression(C=1.0, max_iter=2000, random_state=0)
+    model.fit(x_train, labels)
+    probabilities = np.zeros((len(x_test), HORIZON_COUNT))
+    probabilities[:, model.classes_] = model.predict_proba(x_test)
+    return probabilities
