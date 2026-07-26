@@ -20,9 +20,7 @@ def fit_predict(train: dict[str, object], test: dict[str, object]) -> np.ndarray
             0: (len(labels) / (2 * negative)) ** 0.375,
             1: (len(labels) / (2 * positive)) ** 0.375,
         }
-        model = LogisticRegression(
-            C=20.0, class_weight=class_weight, max_iter=2000
-        )
+        model = LogisticRegression(C=20.0, class_weight=class_weight)
         tails.append(model.fit(x_train, target).predict_proba(x_test)[:, 1])
     tails = np.asarray(
         [isotonic_regression(row, increasing=False) for row in np.column_stack(tails)]
