@@ -1,0 +1,5 @@
+data/
+sessions/
+__pycache__/
+*.tmp
+runner.*
