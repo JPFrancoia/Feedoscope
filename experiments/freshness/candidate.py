@@ -23,7 +23,7 @@ def fit_predict(train: dict[str, object], test: dict[str, object]) -> np.ndarray
             C=20.0, class_weight=class_weight, fit_intercept=False
         )
         tails.append(model.fit(x_train, target).predict_proba(x_test)[:, 1])
-    tails = np.minimum.accumulate(np.column_stack(tails), axis=1)
+    tails = -np.sort(-np.column_stack(tails), axis=1)
     return np.column_stack(
         [1.0 - tails[:, 0], tails[:, :-1] - tails[:, 1:], tails[:, -1]]
     )

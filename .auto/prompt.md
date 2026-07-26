@@ -111,7 +111,8 @@ Do not implement same-story/newer-context reassessment in this loop. It needs a 
 - Urgency-to-horizon baseline: `rps=0.21905157`; useful evergreen signal but poor horizon predictions.
 - Normalized EmbeddingGemma multinomial logistic regression roughly halved RPS; weaker regularization helped up to `C=10`.
 - Five cumulative logistic boundaries aligned better with ordered RPS. The retained model uses `C=20`, quarter-to-three-eighths fractional class balancing, and training-only preprocessing.
-- Proper least-squares isotonic projection of crossing boundary probabilities is the current best: `rps=0.08792380`, deterministic on repeat.
+- Proper least-squares isotonic projection reached `rps=0.08792380`; it was later removed because one-line cumulative clipping stayed within the explicit 0.001 simplicity tolerance.
+- The retained simpler model uses already-normalized embeddings directly, omits unused solver settings and boundary intercepts, and scores `rps=0.08835420`. The intercept-free constraint improved calibration while removing parameters.
 - Word/character TF-IDF, title-only text, fixed temporal phrases, parsed durations/dates, urgency, and feed identity did not improve RPS. Explicit temporal features often improved kappa but not calibration.
 - RBF SVMs, k-nearest neighbors, ExtraTrees, PCA/PLS, ridge cumulative regression, latent-score regression, L1 sparsity, bagging, and cross-validated sigmoid calibration all regressed.
 - Two-stage evergreen/mutable classification and centered-embedding blends produced sub-0.001 nominal gains but were discarded under the simplicity and anti-overfitting rule.
