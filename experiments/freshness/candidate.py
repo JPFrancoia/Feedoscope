@@ -14,10 +14,10 @@ def fit_predict(train: dict[str, object], test: dict[str, object]) -> np.ndarray
     tails = []
     for boundary in range(HORIZON_COUNT - 1):
         target = labels > boundary
-        negative, positive = np.bincount(target, minlength=2)
+        counts = np.bincount(target, minlength=2)
         class_weight = {
-            0: (len(labels) / (2 * negative)) ** 0.375,
-            1: (len(labels) / (2 * positive)) ** 0.375,
+            value: (len(labels) / (2 * count)) ** 0.375
+            for value, count in enumerate(counts)
         }
         model = LogisticRegression(
             C=20.0, class_weight=class_weight, fit_intercept=False
