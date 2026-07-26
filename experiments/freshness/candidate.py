@@ -17,8 +17,8 @@ def fit_predict(train: dict[str, object], test: dict[str, object]) -> np.ndarray
         target = labels > boundary
         negative, positive = np.bincount(target, minlength=2)
         class_weight = {
-            0: (len(labels) / (2 * negative)) ** 0.25,
-            1: (len(labels) / (2 * positive)) ** 0.25,
+            0: (len(labels) / (2 * negative)) ** 0.375,
+            1: (len(labels) / (2 * positive)) ** 0.375,
         }
         model = LogisticRegression(
             C=20.0, class_weight=class_weight, max_iter=2000, random_state=0
