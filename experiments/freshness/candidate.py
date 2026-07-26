@@ -1,6 +1,7 @@
 """Autoresearch candidate: ordinal classification over article embeddings."""
 
 import numpy as np
+from sklearn.isotonic import isotonic_regression
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import normalize
 
@@ -24,8 +25,9 @@ def fit_predict(train: dict[str, object], test: dict[str, object]) -> np.ndarray
             C=20.0, class_weight=class_weight, max_iter=2000, random_state=0
         )
         tails.append(model.fit(x_train, target).predict_proba(x_test)[:, 1])
-    tails = np.column_stack(tails)
-    tails = np.minimum.accumulate(tails, axis=1)
+    tails = np.asarray(
+        [isotonic_regression(row, increasing=False) for row in np.column_stack(tails)]
+    )
     return np.column_stack(
         [1.0 - tails[:, 0], tails[:, :-1] - tails[:, 1:], tails[:, -1]]
     )
