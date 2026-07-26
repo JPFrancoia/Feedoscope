@@ -12,14 +12,19 @@ def fit_predict(train: dict[str, object], test: dict[str, object]) -> np.ndarray
     x_train = normalize(np.asarray(train["embeddings"], dtype=float))
     x_test = normalize(np.asarray(test["embeddings"], dtype=float))
     labels = np.asarray(train["labels"], dtype=int)
-    tails = np.column_stack(
-        [
-            LogisticRegression(C=20.0, max_iter=2000, random_state=0)
-            .fit(x_train, labels > boundary)
-            .predict_proba(x_test)[:, 1]
-            for boundary in range(HORIZON_COUNT - 1)
-        ]
-    )
+    tails = []
+    for boundary in range(HORIZON_COUNT - 1):
+        target = labels > boundary
+        negative, positive = np.bincount(target, minlength=2)
+        class_weight = {
+            0: (len(labels) / (2 * negative)) ** 0.25,
+            1: (len(labels) / (2 * positive)) ** 0.25,
+        }
+        model = LogisticRegression(
+            C=20.0, class_weight=class_weight, max_iter=2000, random_state=0
+        )
+        tails.append(model.fit(x_train, target).predict_proba(x_test)[:, 1])
+    tails = np.column_stack(tails)
     tails = np.minimum.accumulate(tails, axis=1)
     return np.column_stack(
         [1.0 - tails[:, 0], tails[:, :-1] - tails[:, 1:], tails[:, -1]]
