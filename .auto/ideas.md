@@ -1,0 +1,4 @@
+- Validate the retained isotonic ordinal model on a newly frozen, human-audited temporal holdout before accepting any sub-0.001 gain.
+- Re-evaluate smoothed feed priors and the two-stage evergreen/mutable model only with more sources and an unseen-feed holdout; both had small RPS gains but failed the simplicity/overfitting rule here.
+- Export teacher confidence as a training-only sample weight in a future benchmark; the current candidate receives only hard labels.
+- Build the separate same-story/newer-context invalidation corpus after the article-only model is finalized.
