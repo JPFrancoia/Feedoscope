@@ -14,7 +14,7 @@ def fit_predict(train: dict[str, object], test: dict[str, object]) -> np.ndarray
     labels = np.asarray(train["labels"], dtype=int)
     tails = np.column_stack(
         [
-            LogisticRegression(C=10.0, max_iter=2000, random_state=0)
+            LogisticRegression(C=20.0, max_iter=2000, random_state=0)
             .fit(x_train, labels > boundary)
             .predict_proba(x_test)[:, 1]
             for boundary in range(HORIZON_COUNT - 1)
