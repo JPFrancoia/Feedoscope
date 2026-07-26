@@ -21,7 +21,7 @@ def fit_predict(train: dict[str, object], test: dict[str, object]) -> np.ndarray
             1: (len(labels) / (2 * positive)) ** 0.375,
         }
         model = LogisticRegression(
-            C=20.0, class_weight=class_weight, max_iter=2000, random_state=0
+            C=20.0, class_weight=class_weight, max_iter=2000
         )
         tails.append(model.fit(x_train, target).predict_proba(x_test)[:, 1])
     tails = np.asarray(
