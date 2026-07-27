@@ -1,0 +1,2 @@
+drop table semantic_freshness_inference;
+drop table semantic_freshness_teacher_labels;

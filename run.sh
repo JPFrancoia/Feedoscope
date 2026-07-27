@@ -29,8 +29,11 @@ case "$1" in
   train)
     make train
     ;;
+  train_freshness)
+    make train_freshness
+    ;;
   *)
-    echo "Usage: $0 {infer|train}"
+    echo "Usage: $0 {infer|train|train_freshness}"
     exit 1
     ;;
 esac

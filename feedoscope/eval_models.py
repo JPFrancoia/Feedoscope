@@ -36,8 +36,10 @@ from custom_logging import init_logging
 from feedoscope import (
     config,
     llm_learn,
+    llm_learn_semantic_freshness,
     llm_learn_urgency,
     relevance_embedding,
+    semantic_freshness_embedding,
     urgency_embedding,
 )
 from feedoscope.data_registry import data_registry as dr
@@ -415,12 +417,75 @@ async def eval_urgency(device: torch.device) -> None:
     logger.info(f"[Urgency] Evaluation completed in {elapsed_time:.2f} seconds.")
 
 
+async def eval_semantic_freshness(device: torch.device) -> None:
+    """Evaluate freshness on the newest chronological labeled holdout."""
+    validation_size = config.SEMANTIC_FRESHNESS_VALIDATION_SIZE
+    if validation_size == 0:
+        logger.info("SEMANTIC_FRESHNESS_VALIDATION_SIZE is 0. Skipping freshness eval.")
+        return
+
+    labeled_data = await dr.get_semantic_freshness_training_data()
+    if len(labeled_data) <= validation_size:
+        logger.warning("[Freshness] Not enough labels for the temporal holdout.")
+        return
+
+    articles = [article for article, _, _, _ in labeled_data]
+    labels = np.asarray([label for _, label, _, _ in labeled_data], dtype=int)
+    train_slice, eval_slice = llm_learn_semantic_freshness.split_temporal_holdout(
+        labels
+    )
+    train_articles = articles[train_slice]
+    train_labels = labels[train_slice]
+    eval_articles = articles[eval_slice]
+    eval_labels = labels[eval_slice]
+
+    tokenizer, encoder = relevance_embedding.load_encoder(
+        device,
+        pipeline_label="semantic freshness",
+    )
+    train_embeddings = await relevance_embedding.encode_articles(
+        train_articles,
+        tokenizer,
+        encoder,
+        device,
+        pipeline_label="semantic freshness",
+    )
+    classifiers = semantic_freshness_embedding.fit_classifiers(
+        train_embeddings,
+        train_labels,
+    )
+    eval_embeddings = await relevance_embedding.encode_articles(
+        eval_articles,
+        tokenizer,
+        encoder,
+        device,
+        pipeline_label="semantic freshness",
+    )
+    probabilities = semantic_freshness_embedding.bucket_probabilities(
+        eval_embeddings,
+        classifiers,
+    )
+    metrics = llm_learn_semantic_freshness.compute_metrics(eval_labels, probabilities)
+    await save_eval_results(
+        model_name="Freshness",
+        training_counts={
+            horizon: int((train_labels == index).sum())
+            for index, horizon in enumerate(semantic_freshness_embedding.HORIZONS)
+        },
+        eval_counts={
+            horizon: int((eval_labels == index).sum())
+            for index, horizon in enumerate(semantic_freshness_embedding.HORIZONS)
+        },
+        metrics=metrics,
+    )
+
+
 async def main() -> None:
-    """Run evaluation for both models sequentially."""
+    """Run configured relevance, urgency, and freshness evaluations."""
     validation_size = config.VALIDATION_SIZE
 
-    if validation_size == 0:
-        logger.info("VALIDATION_SIZE is 0. Skipping evaluation.")
+    if validation_size == 0 and config.SEMANTIC_FRESHNESS_VALIDATION_SIZE == 0:
+        logger.info("No validation size is set. Skipping evaluation.")
         return
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -440,8 +505,10 @@ async def main() -> None:
     await dr.global_pool.open(wait=True)
 
     try:
-        await eval_relevance(device)
-        await eval_urgency(device)
+        if validation_size:
+            await eval_relevance(device)
+            await eval_urgency(device)
+        await eval_semantic_freshness(device)
     finally:
         await dr.global_pool.close()
 

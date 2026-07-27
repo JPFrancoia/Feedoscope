@@ -4,8 +4,16 @@ import logging
 import math
 import time
 
+import numpy as np
+
 from custom_logging import init_logging
-from feedoscope import config, llm_infer, llm_infer_urgency
+from feedoscope import (
+    config,
+    llm_infer,
+    llm_infer_semantic_freshness,
+    llm_infer_urgency,
+    semantic_freshness_embedding,
+)
 from feedoscope.data_registry import data_registry as dr
 from feedoscope.utils import clean_title
 
@@ -107,7 +115,39 @@ async def main() -> None:
             f"model_key={urgency_model_key}."
         )
 
-        # Step 3: Run relevance inference.
+        # Step 3: Run semantic freshness in shadow mode. Its stored distribution
+        # and tags do not affect the existing urgency-based relevance decay.
+        logger.info("Starting shadow semantic-freshness inference...")
+        freshness_start = time.time()
+        try:
+            freshness_results = await llm_infer_semantic_freshness.infer(articles)
+            freshness_model_key = llm_infer_semantic_freshness.get_active_model_key()
+            await dr.register_semantic_freshness_inference(
+                freshness_results,
+                model_key=freshness_model_key,
+            )
+            tag_ids = await dr.ensure_semantic_freshness_user_tags()
+            freshness_horizons = [
+                semantic_freshness_embedding.HORIZONS[index]
+                for index in np.argmax(freshness_results.bucket_probabilities, axis=1)
+            ]
+            await dr.assign_semantic_freshness_auto_tags(
+                freshness_results.article_ids,
+                freshness_horizons,
+                tag_ids,
+            )
+            logger.info(
+                f"Shadow semantic-freshness inference completed in "
+                f"{time.time() - freshness_start:.2f} seconds for "
+                f"{len(freshness_results.article_ids)} articles with "
+                f"model_key={freshness_model_key}."
+            )
+        except Exception:
+            logger.exception(
+                "Shadow semantic-freshness inference failed; continuing with relevance."
+            )
+
+        # Step 4: Run relevance inference.
         logger.info("Starting inference for relevance scores...")
         relevance_start = time.time()
         relevance_scores = await llm_infer.infer(articles)
@@ -117,7 +157,7 @@ async def main() -> None:
             f"for {len(relevance_scores.article_ids)} articles."
         )
 
-        # Step 4: Fetch the refreshed urgency scores for decay calculation.
+        # Step 5: Fetch the refreshed urgency scores for decay calculation.
         article_ids = [article.article_id for article in articles]
         urgency_scores = await dr.get_urgency_scores_for_articles(
             article_ids,
@@ -127,7 +167,7 @@ async def main() -> None:
             f"Found refreshed urgency scores for {len(urgency_scores)}/{len(articles)} articles."
         )
 
-        # Step 5: Apply time-decay using urgency probabilities.
+        # Step 6: Apply time-decay using urgency probabilities.
         for idx in range(len(articles)):
             assert articles[idx].article_id == relevance_scores.article_ids[idx]
 
@@ -153,7 +193,7 @@ async def main() -> None:
             f"for {len(articles)} articles."
         )
 
-        # Step 6: Write final decayed scores to DB.
+        # Step 7: Write final decayed scores to DB.
         await dr.update_scores(
             article_ids=relevance_scores.article_ids,
             article_titles=relevance_scores.article_titles,

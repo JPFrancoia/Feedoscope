@@ -42,6 +42,12 @@ train_urgency:
 infer_urgency:
 	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.llm_infer_urgency
 
+train_freshness:
+	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.llm_learn_semantic_freshness
+
+infer_freshness:
+	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.llm_infer_semantic_freshness
+
 full_infer:
 	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.main
 

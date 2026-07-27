@@ -75,3 +75,11 @@ class UrgencyInferenceResults(BaseModel):
 
     article_ids: list[int]
     urgency_scores: list[float]
+
+
+class SemanticFreshnessInferenceResults(BaseModel):
+    """Six-bucket semantic useful-lifetime predictions for articles."""
+
+    article_ids: list[int]
+    bucket_probabilities: list[list[float]]
+    expected_lifetime_days: list[float]

@@ -82,3 +82,18 @@ RELEVANCE_LINEAR_C = float(os.getenv("RELEVANCE_LINEAR_C", "5.0"))
 # Urgency intentionally shares the same embedding config as relevance for cache
 # reuse, but keeps its own classifier regularization.
 URGENCY_LINEAR_C = float(os.getenv("URGENCY_LINEAR_C", "1.0"))
+
+# The semantic-freshness model uses five cumulative logistic heads over the
+# shared embedding cache. These values reproduce the selected benchmark.
+SEMANTIC_FRESHNESS_LINEAR_C = float(os.getenv("SEMANTIC_FRESHNESS_LINEAR_C", "20.0"))
+SEMANTIC_FRESHNESS_WEIGHT_EXPONENT = float(
+    os.getenv("SEMANTIC_FRESHNESS_WEIGHT_EXPONENT", "0.375")
+)
+assert SEMANTIC_FRESHNESS_WEIGHT_EXPONENT > 0
+
+# Zero skips the chronological freshness holdout. Set this to the size of a
+# newly collected temporal holdout before interpreting training metrics.
+SEMANTIC_FRESHNESS_VALIDATION_SIZE = int(
+    os.getenv("SEMANTIC_FRESHNESS_VALIDATION_SIZE", "0")
+)
+assert SEMANTIC_FRESHNESS_VALIDATION_SIZE >= 0
