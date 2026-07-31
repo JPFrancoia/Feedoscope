@@ -1,7 +1,7 @@
 create table semantic_freshness_teacher_labels (
     article_id bigint primary key references entries(id) on delete cascade,
     horizon smallint not null check (horizon between 0 and 5),
-    confidence confidence not null check (confidence in ('medium', 'high')),
+    confidence confidence not null check (confidence = 'high'),
     source text not null,
     labeled_at timestamp with time zone not null default now()
 );

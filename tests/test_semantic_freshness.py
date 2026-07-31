@@ -54,7 +54,7 @@ def test_artifact_round_trip_and_fingerprint_stability(tmp_path: Path) -> None:
     labels = np.tile(np.arange(6), 2)
     classifiers = freshness.fit_classifiers(embeddings, labels)
     fingerprint = freshness.fingerprint_labels(
-        [(3, 1, "reviewed", "high"), (1, 0, "teacher", "medium")]
+        [(3, 1, "reviewed", "high"), (1, 0, "teacher", "high")]
     )
     metadata = freshness.artifact_metadata(
         fingerprint,
@@ -72,7 +72,7 @@ def test_artifact_round_trip_and_fingerprint_stability(tmp_path: Path) -> None:
     )
     assert loaded_metadata == metadata
     assert fingerprint == freshness.fingerprint_labels(
-        [(1, 0, "teacher", "medium"), (3, 1, "reviewed", "high")]
+        [(1, 0, "teacher", "high"), (3, 1, "reviewed", "high")]
     )
 
 

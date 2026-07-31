@@ -48,6 +48,9 @@ default-groups = ["dev", "train", "infer"]
 [tool.uv.sources]
 microsoft-python-type-stubs = { git = "https://github.com/microsoft/python-type-stubs.git" }
 
+[tool.mypy]
+exclude = "^experiments/"
+
 [tool.isort]
 # Make isort compatible with black
 profile = "black"

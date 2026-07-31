@@ -45,6 +45,6 @@ where e.status = 'read'
   and cardinality(coalesce(rl.titles, array[]::text[])) <= 1
   and (
       cardinality(rl.titles) = 1
-      or (rl.titles is null and tl.confidence in ('medium', 'high'))
+      or (rl.titles is null and tl.confidence = 'high')
   )
 order by e.published_at asc, e.id asc;

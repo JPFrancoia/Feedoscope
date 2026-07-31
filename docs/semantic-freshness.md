@@ -15,13 +15,13 @@ underscores (for example, `lt_24h`).
   automatic tag and never removes a reviewed tag.
 - At training start, an article that has been read with exactly one automatic
   tag and no reviewed tag is promoted to the equivalent reviewed tag.
-- Read articles with one reviewed tag train the model. A medium/high-confidence
-  row in `semantic_freshness_teacher_labels` is a bootstrap fallback. Articles
+- Read articles with one reviewed tag train the model. A high-confidence row
+  in `semantic_freshness_teacher_labels` is a bootstrap fallback. Articles
   with multiple reviewed tags are excluded and logged.
 
 Import the frozen teacher CSV once after migration. It must include
-`article_id`, `horizon`, and `confidence` columns; only `medium` and `high`
-confidence rows are imported.
+`article_id`, `horizon`, and `confidence` columns; only `high` confidence rows
+are imported.
 
 ```bash
 LOGGING_CONFIG=dev_logging.conf uv run python -m \

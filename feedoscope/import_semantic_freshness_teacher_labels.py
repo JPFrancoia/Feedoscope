@@ -19,7 +19,7 @@ def load_labels(path: Path, source: str) -> list[tuple[int, int, str, str]]:
         for row in csv.DictReader(file):
             horizon = horizon_by_name.get(row.get("horizon", ""))
             confidence = row.get("confidence", "")
-            if horizon is None or confidence not in {"medium", "high"}:
+            if horizon is None or confidence != "high":
                 continue
             labels.append((int(row["article_id"]), horizon, confidence, source))
     return labels
@@ -29,7 +29,7 @@ async def main(path: Path, source: str) -> None:
     """Persist one frozen teacher-label export for future bootstrap training."""
     labels = load_labels(path, source)
     if not labels:
-        raise RuntimeError("No medium/high semantic-freshness labels were found.")
+        raise RuntimeError("No high-confidence semantic-freshness labels were found.")
     await dr.global_pool.open(wait=True)
     try:
         await dr.upsert_semantic_freshness_teacher_labels(labels)
