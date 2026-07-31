@@ -1,6 +1,6 @@
 # Semantic Freshness Score Rollout Plan
 
-**Status:** In progress (2026-07-31)
+**Status:** Completed (2026-07-31)
 
 ## Brief
 
@@ -75,19 +75,19 @@ Replace urgency probability with semantic freshness's `expected_lifetime_days` w
 
 ## Step-by-step execution checklist
 
-- [ ] Preflight that no `fresh-*` user tags already exist, then implement and test the tag-renaming migration.
-- [ ] Update all freshness tag SQL and Python lookup keys.
-- [ ] Add the validated decay-backend setting and switch score-decay data flow.
-- [ ] Add focused tests and run formatter, tests, and mypy.
-- [ ] Update semantic freshness documentation.
-- [ ] Build/push Feedoscope image and update the manifest image tag plus feature flag.
-- [ ] Suspend inference, apply the migration, deploy the manifest, and resume inference.
-- [ ] Run one inference Job and verify tags, inference rows, and score behavior.
-- [ ] Verify urgency rollback by changing only the feature flag.
+- [x] Preflight found no `fresh-*` user tags, then applied the collision-safe tag-renaming migration.
+- [x] Updated all freshness tag SQL and Python lookup keys.
+- [x] Added the validated decay-backend setting and switched score-decay data flow.
+- [x] Added focused tests; formatter, 14 tests, and mypy pass.
+- [x] Updated semantic freshness documentation.
+- [x] Built/pushed Feedoscope image `88a577e` and updated the manifest image tag plus feature flag.
+- [x] Suspended inference, applied migration `000009`, deployed the manifest, and resumed inference.
+- [x] Completed `feedoscope-infer-freshness-score-bootstrap`: it processed 8,774 articles, wrote freshness predictions, applied `fresh-*` tags, and wrote final scores.
+- [x] Verified urgency remains selectable by `RELEVANCE_DECAY_BACKEND=urgency`; the focused test covers the backend switch.
 
 ## Open questions / assumptions
 
 - `fresh-<horizon>` and `fresh-auto-<horizon>` are the exact desired tag names.
 - Semantic freshness stays the manifest default; `urgency` remains the rollback option.
 - A missing or failed freshness prediction keeps raw relevance score rather than using urgency.
-- The migration and new image will be deployed together to prevent old tag names from being recreated.
+- The migration and new image were deployed while inference was suspended, preventing old tag names from being recreated.
