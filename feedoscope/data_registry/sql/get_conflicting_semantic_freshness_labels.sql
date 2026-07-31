@@ -5,8 +5,8 @@ join user_tags ut on ut.id = eut.user_tag_id
 where e.status = 'read'
   and ut.user_id = 1
   and ut.title in (
-      'lt-24h-freshness', '1-3d-freshness', '4-7d-freshness',
-      '8-30d-freshness', '1-6m-freshness', 'evergreen-freshness'
+      'fresh-lt-24h', 'fresh-1-3d', 'fresh-4-7d',
+      'fresh-8-30d', 'fresh-1-6m', 'fresh-evergreen'
   )
 group by e.id, e.title
 having count(*) > 1

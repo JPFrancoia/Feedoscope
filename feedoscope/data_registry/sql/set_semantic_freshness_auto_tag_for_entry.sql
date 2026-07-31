@@ -5,8 +5,8 @@ with removed as (
       and eut.user_tag_id = ut.id
       and ut.user_id = 1
       and ut.title in (
-          'lt-24h-auto-freshness', '1-3d-auto-freshness', '4-7d-auto-freshness',
-          '8-30d-auto-freshness', '1-6m-auto-freshness', 'evergreen-auto-freshness'
+          'fresh-auto-lt-24h', 'fresh-auto-1-3d', 'fresh-auto-4-7d',
+          'fresh-auto-8-30d', 'fresh-auto-1-6m', 'fresh-auto-evergreen'
       )
 )
 insert into entry_user_tags (entry_id, user_tag_id)

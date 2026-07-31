@@ -37,7 +37,18 @@ ALLOW_INFERENCE_WO_GPU = strtobool(os.getenv("ALLOW_INFERENCE_WO_GPU", "False"))
 # training so explicitly preferred articles influence the classifier more.
 EXCELLENT_WEIGHT = float(os.getenv("EXCELLENT_WEIGHT", "3.0"))
 
-# Half-life boundaries (in days) for urgency-based relevance decay.
+# Select the input used for final relevance-score decay. Semantic freshness is
+# the default; urgency remains available for an immediate configuration rollback.
+_relevance_decay_backend = os.getenv("RELEVANCE_DECAY_BACKEND", "semantic_freshness")
+assert _relevance_decay_backend in (
+    "semantic_freshness",
+    "urgency",
+), "RELEVANCE_DECAY_BACKEND must be 'semantic_freshness' or 'urgency'"
+RELEVANCE_DECAY_BACKEND = cast(
+    Literal["semantic_freshness", "urgency"], _relevance_decay_backend
+)
+
+# Half-life boundaries (in days) for the legacy urgency-based relevance decay.
 HALF_LIFE_EVERGREEN = float(os.getenv("HALF_LIFE_EVERGREEN", "120"))
 HALF_LIFE_URGENT = float(os.getenv("HALF_LIFE_URGENT", "10"))
 assert (

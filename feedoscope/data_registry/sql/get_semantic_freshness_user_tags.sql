@@ -2,9 +2,9 @@ select id, title
 from user_tags
 where user_id = 1
   and title in (
-      'lt-24h-freshness', '1-3d-freshness', '4-7d-freshness',
-      '8-30d-freshness', '1-6m-freshness', 'evergreen-freshness',
-      'lt-24h-auto-freshness', '1-3d-auto-freshness',
-      '4-7d-auto-freshness', '8-30d-auto-freshness',
-      '1-6m-auto-freshness', 'evergreen-auto-freshness'
+      'fresh-lt-24h', 'fresh-1-3d', 'fresh-4-7d',
+      'fresh-8-30d', 'fresh-1-6m', 'fresh-evergreen',
+      'fresh-auto-lt-24h', 'fresh-auto-1-3d',
+      'fresh-auto-4-7d', 'fresh-auto-8-30d',
+      'fresh-auto-1-6m', 'fresh-auto-evergreen'
   );

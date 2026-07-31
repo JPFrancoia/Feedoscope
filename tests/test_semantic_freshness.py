@@ -7,6 +7,53 @@ from sklearn.linear_model import LogisticRegression
 
 from feedoscope import semantic_freshness_embedding as freshness
 
+TAG_HORIZONS = ("lt-24h", "1-3d", "4-7d", "8-30d", "1-6m", "evergreen")
+SQL_DIR = Path(__file__).parents[1] / "feedoscope" / "data_registry" / "sql"
+MIGRATIONS_DIR = Path(__file__).parents[1] / "db" / "migrations"
+
+
+def test_semantic_freshness_tag_queries_use_short_prefixes() -> None:
+    """Keep reviewed and automatic freshness tag names aligned."""
+    reviewed_names = {f"fresh-{horizon}" for horizon in TAG_HORIZONS}
+    automatic_names = {f"fresh-auto-{horizon}" for horizon in TAG_HORIZONS}
+    expected_names = {
+        "upsert_semantic_freshness_user_tags.sql": reviewed_names | automatic_names,
+        "get_semantic_freshness_user_tags.sql": reviewed_names | automatic_names,
+        "set_semantic_freshness_auto_tag_for_entry.sql": automatic_names,
+        "promote_read_auto_freshness_tags.sql": reviewed_names | automatic_names,
+        "get_semantic_freshness_training.sql": reviewed_names,
+        "get_conflicting_semantic_freshness_labels.sql": reviewed_names,
+    }
+    for filename, names in expected_names.items():
+        text = (SQL_DIR / filename).read_text()
+        assert all(name in text for name in names)
+        assert "-freshness" not in text
+
+    promotion_query = (SQL_DIR / "promote_read_auto_freshness_tags.sql").read_text()
+    assert "replace(min(ut.title), 'fresh-auto-', 'fresh-')" in promotion_query
+    assert "replace(c.reviewed_title, 'fresh-', 'fresh-auto-')" in promotion_query
+
+
+def test_semantic_freshness_tag_migration_maps_every_tag() -> None:
+    """Keep the reversible in-place tag rename complete and collision-safe."""
+    up_query = (
+        MIGRATIONS_DIR / "000009_rename_semantic_freshness_tags.up.sql"
+    ).read_text()
+    down_query = (
+        MIGRATIONS_DIR / "000009_rename_semantic_freshness_tags.down.sql"
+    ).read_text()
+    for horizon in TAG_HORIZONS:
+        assert f"when '{horizon}-freshness' then 'fresh-{horizon}'" in up_query
+        assert (
+            f"when '{horizon}-auto-freshness' then 'fresh-auto-{horizon}'" in up_query
+        )
+        assert f"when 'fresh-{horizon}' then '{horizon}-freshness'" in down_query
+        assert (
+            f"when 'fresh-auto-{horizon}' then '{horizon}-auto-freshness'" in down_query
+        )
+    assert "freshness tag rename blocked" in up_query
+    assert "freshness tag rollback blocked" in down_query
+
 
 def test_build_targets_covers_all_horizons() -> None:
     labels = np.arange(6)

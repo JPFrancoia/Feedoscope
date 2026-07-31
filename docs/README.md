@@ -12,4 +12,4 @@ systems.
 - `model-eval-history.md`: weekly eval result persistence to JSON history and
   Miniflux-owned PostgreSQL storage.
 - `semantic-freshness.md`: ordered useful-lifetime labels, five-head training,
-  shadow inference, and rollout constraints.
+  final-score decay, and rollout constraints.

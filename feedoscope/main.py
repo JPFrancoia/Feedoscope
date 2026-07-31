@@ -29,47 +29,66 @@ MAX_LOOKBACK_DAYS_SAMPLING = 365
 SAMPLING = 1500
 
 
-def compute_decay_rate(urgency_prob: float) -> float:
-    """Interpolate decay rate between evergreen and urgent half-lives.
-
-    We interpolate the half-life linearly between the configured evergreen and
-    urgent boundaries based on the urgency probability, then compute the
-    exponential decay rate from that half-life.
-
-    Args:
-        urgency_prob: Probability of urgency from the current urgency backend (0.0 to 1.0).
-
-    Returns:
-        The exponential decay rate constant.
-
-    """
-    half_life = config.HALF_LIFE_EVERGREEN + urgency_prob * (
+def compute_urgency_half_life(urgency_prob: float) -> float:
+    """Interpolate the legacy urgency-based relevance half-life in days."""
+    return config.HALF_LIFE_EVERGREEN + urgency_prob * (
         config.HALF_LIFE_URGENT - config.HALF_LIFE_EVERGREEN
     )
-    return math.log(2) / half_life
+
+
+def is_valid_half_life(half_life_days: float | None) -> bool:
+    """Return whether a predicted lifetime can safely drive score decay."""
+    return (
+        half_life_days is not None
+        and math.isfinite(half_life_days)
+        and half_life_days > 0
+    )
+
+
+def get_decay_half_life(
+    urgency_prob: float | None,
+    expected_lifetime_days: float | None,
+) -> float | None:
+    """Return the half-life selected by the active decay backend."""
+    if config.RELEVANCE_DECAY_BACKEND == "semantic_freshness":
+        return (
+            expected_lifetime_days
+            if is_valid_half_life(expected_lifetime_days)
+            else None
+        )
+    if urgency_prob is None:
+        return None
+    return compute_urgency_half_life(urgency_prob)
 
 
 def decay_relevance_score(
     original_score: int,
     date_entered: datetime,
-    urgency_prob: float,
+    half_life_days: float,
 ) -> int:
-    """Apply time-decay to a relevance score based on urgency probability.
+    """Apply exponential time decay using a concrete half-life in days.
 
     Args:
         original_score: The raw relevance score (0-100).
         date_entered: When the article was published.
-        urgency_prob: Probability of urgency (0.0 to 1.0).
+        half_life_days: Days until the score is halved.
 
     Returns:
         The decayed relevance score.
 
+    Raises:
+        ValueError: If the half-life is not finite and positive.
     """
-    days_passed = (
-        (datetime.now(timezone.utc) - date_entered).total_seconds() / 3600 / 24
+    if not is_valid_half_life(half_life_days):
+        raise ValueError("half_life_days must be finite and positive")
+
+    days_passed = max(
+        0.0,
+        (datetime.now(timezone.utc) - date_entered).total_seconds() / 3600 / 24,
     )
-    decay_rate = compute_decay_rate(urgency_prob)
-    decayed_score = original_score * math.exp(-decay_rate * days_passed)
+    decayed_score = original_score * math.exp(
+        -math.log(2) * days_passed / half_life_days
+    )
 
     return int(round(decayed_score))
 
@@ -115,37 +134,64 @@ async def main() -> None:
             f"model_key={urgency_model_key}."
         )
 
-        # Step 3: Run semantic freshness in shadow mode. Its stored distribution
-        # and tags do not affect the existing urgency-based relevance decay.
-        logger.info("Starting shadow semantic-freshness inference...")
+        # Step 3: Refresh semantic freshness predictions and tags.
+        logger.info("Starting semantic-freshness inference...")
         freshness_start = time.time()
+        freshness_half_lives: dict[int, float] = {}
         try:
             freshness_results = await llm_infer_semantic_freshness.infer(articles)
-            freshness_model_key = llm_infer_semantic_freshness.get_active_model_key()
-            await dr.register_semantic_freshness_inference(
-                freshness_results,
-                model_key=freshness_model_key,
-            )
-            tag_ids = await dr.ensure_semantic_freshness_user_tags()
-            freshness_horizons = [
-                semantic_freshness_embedding.HORIZONS[index]
-                for index in np.argmax(freshness_results.bucket_probabilities, axis=1)
-            ]
-            await dr.assign_semantic_freshness_auto_tags(
-                freshness_results.article_ids,
-                freshness_horizons,
-                tag_ids,
-            )
-            logger.info(
-                f"Shadow semantic-freshness inference completed in "
-                f"{time.time() - freshness_start:.2f} seconds for "
-                f"{len(freshness_results.article_ids)} articles with "
-                f"model_key={freshness_model_key}."
+            if len(freshness_results.article_ids) != len(
+                freshness_results.expected_lifetime_days
+            ):
+                raise RuntimeError(
+                    "Freshness article IDs and lifetimes must have matching lengths."
+                )
+            freshness_half_lives = dict(
+                zip(
+                    freshness_results.article_ids,
+                    freshness_results.expected_lifetime_days,
+                    strict=True,
+                )
             )
         except Exception:
             logger.exception(
-                "Shadow semantic-freshness inference failed; continuing with relevance."
+                "Semantic-freshness inference failed; semantic decay will keep raw scores."
             )
+        else:
+            try:
+                freshness_model_key = (
+                    llm_infer_semantic_freshness.get_active_model_key()
+                )
+                await dr.register_semantic_freshness_inference(
+                    freshness_results,
+                    model_key=freshness_model_key,
+                )
+                logger.info(
+                    f"Semantic-freshness inference completed in "
+                    f"{time.time() - freshness_start:.2f} seconds for "
+                    f"{len(freshness_results.article_ids)} articles with "
+                    f"model_key={freshness_model_key}."
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to store semantic-freshness inference results."
+                )
+
+            try:
+                tag_ids = await dr.ensure_semantic_freshness_user_tags()
+                freshness_horizons = [
+                    semantic_freshness_embedding.HORIZONS[index]
+                    for index in np.argmax(
+                        freshness_results.bucket_probabilities, axis=1
+                    )
+                ]
+                await dr.assign_semantic_freshness_auto_tags(
+                    freshness_results.article_ids,
+                    freshness_horizons,
+                    tag_ids,
+                )
+            except Exception:
+                logger.exception("Failed to assign semantic-freshness tags.")
 
         # Step 4: Run relevance inference.
         logger.info("Starting inference for relevance scores...")
@@ -157,35 +203,47 @@ async def main() -> None:
             f"for {len(relevance_scores.article_ids)} articles."
         )
 
-        # Step 5: Fetch the refreshed urgency scores for decay calculation.
-        article_ids = [article.article_id for article in articles]
-        urgency_scores = await dr.get_urgency_scores_for_articles(
-            article_ids,
-            model_key=urgency_model_key,
-        )
-        logger.info(
-            f"Found refreshed urgency scores for {len(urgency_scores)}/{len(articles)} articles."
-        )
+        # Step 5: Fetch the legacy urgency scores only when the rollback backend is active.
+        urgency_scores: dict[int, float] = {}
+        if config.RELEVANCE_DECAY_BACKEND == "urgency":
+            article_ids = [article.article_id for article in articles]
+            urgency_scores = await dr.get_urgency_scores_for_articles(
+                article_ids,
+                model_key=urgency_model_key,
+            )
+            logger.info(
+                f"Found refreshed urgency scores for {len(urgency_scores)}/{len(articles)} "
+                "articles."
+            )
 
-        # Step 6: Apply time-decay using urgency probabilities.
+        # Step 6: Apply time decay from the selected backend.
         for idx in range(len(articles)):
-            assert articles[idx].article_id == relevance_scores.article_ids[idx]
+            article = articles[idx]
+            assert article.article_id == relevance_scores.article_ids[idx]
 
-            urgency_prob = urgency_scores.get(articles[idx].article_id)
-            if urgency_prob is None:
-                decayed_score = relevance_scores.scores[idx]
-                logger.warning(
-                    f"Article {articles[idx].article_id} has no refreshed urgency score. "
-                    "Skipping decay."
-                )
-            else:
-                decayed_score = decay_relevance_score(
-                    original_score=relevance_scores.scores[idx],
-                    date_entered=articles[idx].date_entered,
-                    urgency_prob=urgency_prob,
-                )
+            urgency_prob = urgency_scores.get(article.article_id)
+            half_life_days = get_decay_half_life(
+                urgency_prob=urgency_prob,
+                expected_lifetime_days=freshness_half_lives.get(article.article_id),
+            )
+            if half_life_days is None:
+                if config.RELEVANCE_DECAY_BACKEND == "semantic_freshness":
+                    logger.warning(
+                        f"Article {article.article_id} has no valid semantic freshness "
+                        "lifetime. Skipping decay."
+                    )
+                else:
+                    logger.warning(
+                        f"Article {article.article_id} has no refreshed urgency score. "
+                        "Skipping decay."
+                    )
+                continue
 
-            relevance_scores.scores[idx] = decayed_score
+            relevance_scores.scores[idx] = decay_relevance_score(
+                original_score=relevance_scores.scores[idx],
+                date_entered=article.date_entered,
+                half_life_days=half_life_days,
+            )
 
         inference_time = time.time() - start_time
         logger.info(

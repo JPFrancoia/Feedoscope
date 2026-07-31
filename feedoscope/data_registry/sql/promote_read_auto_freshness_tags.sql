@@ -1,15 +1,15 @@
 with candidates as (
     select
         e.id as entry_id,
-        replace(min(ut.title), '-auto-freshness', '-freshness') as reviewed_title
+        replace(min(ut.title), 'fresh-auto-', 'fresh-') as reviewed_title
     from entries e
     join entry_user_tags eut on eut.entry_id = e.id
     join user_tags ut on ut.id = eut.user_tag_id
     where e.status = 'read'
       and ut.user_id = 1
       and ut.title in (
-          'lt-24h-auto-freshness', '1-3d-auto-freshness', '4-7d-auto-freshness',
-          '8-30d-auto-freshness', '1-6m-auto-freshness', 'evergreen-auto-freshness'
+          'fresh-auto-lt-24h', 'fresh-auto-1-3d', 'fresh-auto-4-7d',
+          'fresh-auto-8-30d', 'fresh-auto-1-6m', 'fresh-auto-evergreen'
       )
       and not exists (
           select 1
@@ -18,8 +18,8 @@ with candidates as (
           where reviewed_eut.entry_id = e.id
             and reviewed_ut.user_id = 1
             and reviewed_ut.title in (
-                'lt-24h-freshness', '1-3d-freshness', '4-7d-freshness',
-                '8-30d-freshness', '1-6m-freshness', 'evergreen-freshness'
+                'fresh-lt-24h', 'fresh-1-3d', 'fresh-4-7d',
+                'fresh-8-30d', 'fresh-1-6m', 'fresh-evergreen'
             )
       )
     group by e.id
@@ -31,7 +31,7 @@ with candidates as (
       and eut.user_tag_id = (
           select id from user_tags
           where user_id = 1
-            and title = replace(c.reviewed_title, '-freshness', '-auto-freshness')
+            and title = replace(c.reviewed_title, 'fresh-', 'fresh-auto-')
       )
     returning c.entry_id, c.reviewed_title
 )

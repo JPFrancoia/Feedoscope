@@ -864,7 +864,7 @@ async def assign_semantic_freshness_auto_tags(
             [
                 {
                     "entry_id": article_id,
-                    "user_tag_id": tag_ids[f"{horizon}-auto-freshness"],
+                    "user_tag_id": tag_ids[f"fresh-auto-{horizon}"],
                 }
                 for article_id, horizon in zip(article_ids, horizons)
             ],

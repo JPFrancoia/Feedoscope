@@ -1,8 +1,8 @@
 # Semantic Freshness
 
-Semantic freshness estimates how long an article's main claim remains useful. It
-is separate from urgency: shadow-mode freshness predictions do not change the
-existing urgency-based relevance decay.
+Semantic freshness estimates how long an article's main claim remains useful.
+Its expected lifetime now drives final relevance-score decay by default; urgency
+remains an explicit rollback backend.
 
 ## Labels
 
@@ -10,9 +10,9 @@ The six ordered horizons are `lt-24h`, `1-3d`, `4-7d`, `8-30d`, `1-6m`, and
 `evergreen`. Teacher CSV horizons use the same names with hyphens replaced by
 underscores (for example, `lt_24h`).
 
-- Reviewed Miniflux tags end in `-freshness` and override every other label.
-- Inference maintains separate `-auto-freshness` tags. It replaces only its own
-  automatic tag and never removes a reviewed tag.
+- Reviewed Miniflux tags are `fresh-<horizon>` and override every other label.
+- Inference maintains separate `fresh-auto-<horizon>` tags. It replaces only
+  its own automatic tag and never removes a reviewed tag.
 - At training start, an article that has been read with exactly one automatic
   tag and no reviewed tag is promoted to the equivalent reviewed tag.
 - Read articles with one reviewed tag train the model. A high-confidence row
@@ -54,16 +54,30 @@ them into six bucket probabilities, stores them in
 `semantic_freshness_inference` by `(article_id, model_key)`, and assigns one
 automatic freshness tag.
 
-`make full_infer` runs this same inference in shadow mode before relevance
-scoring. It persists predictions and tags but leaves `main.py`'s urgency decay
-unchanged.
+`make full_infer` runs freshness inference before relevance scoring. With the
+default `RELEVANCE_DECAY_BACKEND=semantic_freshness`, it uses each article's
+`expected_lifetime_days` as an exponential relevance half-life: the score is
+halved after that many days. A missing, non-finite, or non-positive prediction
+leaves that article's raw relevance score unchanged and logs a warning.
+
+Set `RELEVANCE_DECAY_BACKEND=urgency` to restore the prior urgency-probability
+half-life interpolation without rebuilding the image, then redeploy the
+inference CronJob so its process reads the changed environment. Urgency
+inference still runs in either mode so its stored predictions remain available.
 
 ## Schema and rollout
 
-Apply Feedoscope migrations `000006` and `000007` before deploying this code.
-`000006` creates the teacher-label and model-keyed prediction tables. `000007`
-extends Miniflux's shared `model_evals` table for ordinal freshness metrics.
-Apply those migrations before deploying the Miniflux reader change.
+Apply Feedoscope migrations `000006`, `000007`, and `000009` before deploying
+this code. `000006` creates the teacher-label and model-keyed prediction tables,
+`000007` extends Miniflux's shared `model_evals` table for ordinal freshness
+metrics, and `000009` renames existing tag rows in place to `fresh-*` while
+preserving their entry links.
 
-An untouched temporal, preferably human-reviewed holdout is still required
-before using expected lifetime as a relevance half-life.
+For the tag rename, suspend `feedoscope-infer-job` and wait for its active Job
+to finish before applying `000009`. Then deploy the image that uses `fresh-*`
+and resume the CronJob. For rollback, suspend the CronJob, deploy the old image,
+run the down migration, and resume it. This prevents either image version from
+recreating tags owned by the other naming scheme.
+
+Use an untouched temporal, preferably human-reviewed holdout to calibrate the
+expected-lifetime half-life against observed reading behavior.
