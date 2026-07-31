@@ -191,6 +191,9 @@ async def encode_articles(
     text_hashes = [hash_prepared_text(text) for text in texts]
     article_ids = [article.article_id for article in articles]
     cache_config = get_cache_config()
+    logger.info(
+        f"Looking up {len(article_ids)} {_pipeline_name(pipeline_label)} embedding cache entries"
+    )
     cached = await dr.get_relevance_embeddings(
         article_ids=article_ids,
         model_name=str(cache_config["model_name"]),

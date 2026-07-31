@@ -60,8 +60,10 @@ async def main() -> None:
     if device.type != "cuda" and not config.ALLOW_TRAINING_WO_GPU:
         raise RuntimeError("GPU not available. Exiting")
 
+    logger.info("Opening database pool for semantic freshness training")
     await dr.global_pool.open(wait=True)
     try:
+        logger.info("Preparing semantic freshness labels")
         await dr.ensure_semantic_freshness_user_tags()
         await dr.promote_read_auto_freshness_tags()
         conflicts = await dr.get_conflicting_semantic_freshness_labels()
@@ -70,9 +72,11 @@ async def main() -> None:
                 f"Skipping conflicting reviewed freshness labels for {article_id}: {title}"
             )
 
+        logger.info("Loading effective semantic freshness labels")
         labeled_data = await dr.get_semantic_freshness_training_data()
         if not labeled_data:
             raise RuntimeError("No effective semantic-freshness labels are available.")
+        logger.info(f"Loaded {len(labeled_data)} semantic freshness labels")
 
         articles = [article for article, _, _, _ in labeled_data]
         labels = np.asarray([label for _, label, _, _ in labeled_data], dtype=int)
