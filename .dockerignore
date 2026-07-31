@@ -5,6 +5,8 @@
 *.log
 *__pycache__*
 .git
+.auto/
+experiments/
 *.ruff_cache*
 *saved_models*
 *models*

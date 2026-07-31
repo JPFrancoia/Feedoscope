@@ -5,6 +5,10 @@
 *activity.log*
 *saved_models*
 models/
+
+# Private autoresearch inputs and teacher outputs; never commit.
+.auto/data/
+.auto/sessions/
 test_token.py
 
 *.pkl
