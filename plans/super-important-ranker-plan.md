@@ -1,6 +1,6 @@
 # Dedicated super-important ranker plan
 
-**Status:** Bonus `0.5` approved for controlled production rollout — 2026-08-01
+**Status:** Completed — 2026-08-01
 
 ## 1. Brief
 
@@ -8,7 +8,7 @@ Feedoscope currently learns whether an article is generally worth reading; starr
 
 ## 2. Current state / relevant context
 
-- The active task branch is `super_important` at `c1d3fd1`; before the rolling-window edit, the full suite passes (42 tests).
+- The completed task branch is `super_important` at `9328daa`; the full suite passes (42 tests).
 - Current relevance labels are read, non-downvoted entries as positive and `vote=-1` entries as negative. `vote=1 OR starred` currently only produces `EXCELLENT_WEIGHT` during fitting.
 - Production currently sets `EXCELLENT_WEIGHT=20` in the external Feedoscope training CronJob, although the code default is 3.
 - The current three-label semantic-freshness model supplies the half-life that decays the final relevance score. It does not write prediction tags or prediction rows.
@@ -168,13 +168,14 @@ No Miniflux UI change, additional model, dependency, or CronJob is needed. One F
 - [x] Create a dedicated task worktree for the Feedoscope implementation at `/home/djipey/informatique/python/feedoscope.super-important-ranker` on branch `super-important-ranker`.
 - [x] Implement the versioned two-head artifact, one-pass training/inference path, and model-keyed probability upsert.
 - [x] Add focused tests and the offline chronological benchmark.
-- [x] Run format, tests, Ruff, and mypy. Final local result: 39 tests passed; Ruff and mypy passed.
+- [x] Run format, tests, Ruff, and mypy. Final local result: 42 tests passed; Ruff and mypy passed.
 - [x] Run the first live benchmark. Direct multiplication improved explicit-preference ranking but failed the 0.01 relevance-AP guardrail, so it was not deployed.
 - [x] Implement deterministic bounded-bonus tuning and run chronological validation/test benchmarks. Bonus `3.0` passed validation but failed the one-time confirmation guardrail; production remained unchanged.
 - [x] Replace the single confirmation with the two-window expanding evaluation. The strict per-window top-K rule had no passing bonus; after explicit approval to require top-K improvement in either window while retaining both AP gates in every window, select bonus `0.5`.
-- [ ] Run a no-write current-article comparison, update the infrastructure manifest, train once, and perform controlled inference.
+- [x] Run a no-write current-article comparison, freeze bonus `0.5` and image `9328daa` in infrastructure commit `2d77b4b`, train on 194 positive examples, and complete controlled inference for 8,721 articles.
 - [x] Update durable documentation for the implemented behavior in `docs/super-important-ranker.md` and `docs/README.md`.
-- [ ] After the benchmark and rollout decision, mark this plan completed.
+- [x] Document the deployed value, benchmark evidence, and future retuning procedure in `docs/super-important-ranker.md`.
+- [x] After the benchmark and rollout decision, mark this plan completed.
 
 ## 8. Open questions / assumptions
 
