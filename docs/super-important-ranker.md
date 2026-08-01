@@ -128,9 +128,11 @@ window.
 
 ## Recorded rollout and future retuning
 
-The deployed image is `9328daa` with `SUPER_IMPORTANT_BONUS=0.5`. Controlled
-training used 6,323 good, 1,357 bad, and 194 super-important labels. Controlled
-inference wrote 8,721 `super_important_inference` rows.
+The deployed image is `220a648` with `SUPER_IMPORTANT_BONUS=0.5`, the 50%
+decision-boundary ramp, batched score writes, progress logging, age-block
+inference, and stale downvote cleanup. Training used 6,323 good, 1,357 bad, and
+194 super-important labels. A controlled 365-day refresh scored 55,003 articles,
+and a final `[0, 30)` block verified the deployed operational path.
 
 Bonus 0.5 was the smallest value that passed the rolling gate. In the older
 window, preference AP changed from 0.0173 to 0.0175 and relevance AP from
