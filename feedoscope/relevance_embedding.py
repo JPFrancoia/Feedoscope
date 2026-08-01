@@ -432,11 +432,18 @@ def load_two_head_artifact(
 def combine_probabilities(
     relevance_probabilities: np.ndarray,
     super_important_probabilities: np.ndarray,
+    bonus_strength: float,
 ) -> np.ndarray:
-    """Gate super-important similarity by general relevance."""
+    """Apply a bounded preference bonus while keeping relevance as the base."""
     if relevance_probabilities.shape != super_important_probabilities.shape:
         raise ValueError("Relevance and super-important probabilities must align.")
-    return relevance_probabilities * super_important_probabilities
+    if not math.isfinite(bonus_strength) or bonus_strength < 0:
+        raise ValueError("bonus_strength must be finite and nonnegative.")
+    return (
+        relevance_probabilities
+        * (1 + bonus_strength * super_important_probabilities)
+        / (1 + bonus_strength)
+    )
 
 
 def save_artifact(

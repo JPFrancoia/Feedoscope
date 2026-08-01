@@ -66,6 +66,7 @@ async def predict_combined_probabilities(
         relevance_embedding.predict_probabilities_from_embeddings(
             embeddings, super_important_classifier
         ),
+        bonus_strength=config.SUPER_IMPORTANT_BONUS,
     )
 
 

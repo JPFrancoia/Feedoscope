@@ -144,6 +144,7 @@ async def infer(recent_unread_articles: list[Article]) -> RelevanceInferenceResu
         relevance_embedding.combine_probabilities(
             relevance_probs,
             super_important_probs,
+            bonus_strength=config.SUPER_IMPORTANT_BONUS,
         )
         * 100
     )

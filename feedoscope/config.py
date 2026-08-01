@@ -1,3 +1,4 @@
+import math
 import os
 from typing import Literal, cast
 
@@ -84,6 +85,12 @@ RELEVANCE_ENCODER_BATCH_SIZE = int(os.getenv("RELEVANCE_ENCODER_BATCH_SIZE", "4"
 # Inverse regularization strength for the logistic-regression relevance head.
 # This affects only the classifier fit, not the embedding cache itself.
 RELEVANCE_LINEAR_C = float(os.getenv("RELEVANCE_LINEAR_C", "5.0"))
+
+# Fixed preference bonus selected by the chronological ranker benchmark.
+SUPER_IMPORTANT_BONUS = float(os.getenv("SUPER_IMPORTANT_BONUS", "0.0"))
+assert (
+    math.isfinite(SUPER_IMPORTANT_BONUS) and SUPER_IMPORTANT_BONUS >= 0
+), "SUPER_IMPORTANT_BONUS must be finite and nonnegative"
 
 # Inverse regularization strength for the logistic-regression urgency head.
 # Urgency intentionally shares the same embedding config as relevance for cache

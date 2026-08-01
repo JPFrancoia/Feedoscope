@@ -33,14 +33,38 @@ def test_explicit_preference_label_uses_star_or_upvote() -> None:
     )
 
 
-def test_combined_score_requires_relevance_and_preference() -> None:
-    combined = relevance_embedding.combine_probabilities(
-        np.array([0.9, 0.7]), np.array([0.1, 0.8])
-    )
+def test_combined_score_applies_a_bounded_preference_bonus() -> None:
+    relevance = np.array([0.9, 0.7])
+    preference = np.array([0.1, 0.8])
 
-    np.testing.assert_allclose(combined, [0.09, 0.56])
+    np.testing.assert_allclose(
+        relevance_embedding.combine_probabilities(
+            relevance,
+            preference,
+            bonus_strength=0,
+        ),
+        relevance,
+    )
+    np.testing.assert_allclose(
+        relevance_embedding.combine_probabilities(
+            relevance,
+            preference,
+            bonus_strength=1,
+        ),
+        relevance * (1 + preference) / 2,
+    )
     with pytest.raises(ValueError, match="must align"):
-        relevance_embedding.combine_probabilities(np.array([0.9]), np.array([0.1, 0.8]))
+        relevance_embedding.combine_probabilities(
+            np.array([0.9]),
+            np.array([0.1, 0.8]),
+            bonus_strength=1,
+        )
+    with pytest.raises(ValueError, match="finite and nonnegative"):
+        relevance_embedding.combine_probabilities(
+            relevance,
+            preference,
+            bonus_strength=-1,
+        )
 
 
 def test_two_head_artifact_round_trip_and_rejects_old_shape(tmp_path: Path) -> None:
@@ -121,13 +145,14 @@ def test_chronological_split_excludes_unsettled_labels() -> None:
         cast(Article, SimpleNamespace(article_id=10, last_read=now - timedelta(days=1)))
     )
 
-    training, holdout = eval_models.split_super_important_eval_articles(
+    training, validation, test = eval_models.split_super_important_eval_articles(
         articles,
         now=now,
     )
 
-    assert [article.article_id for article in training] == list(range(8))
-    assert [article.article_id for article in holdout] == [8, 9]
+    assert [article.article_id for article in training] == list(range(6))
+    assert [article.article_id for article in validation] == [6, 7]
+    assert [article.article_id for article in test] == [8, 9]
 
 
 def test_ranking_metrics_reward_super_important_first() -> None:
@@ -151,6 +176,92 @@ def test_ranking_metrics_reward_super_important_first() -> None:
     assert good_ranking["super_important_average_precision"] == 1.0
     assert good_ranking["recall_at_1"] == 1.0
     assert good_ranking["ndcg_at_2"] > reversed_ranking["ndcg_at_2"]
+
+
+def test_rollout_gate_enforces_ap_and_preference_improvements() -> None:
+    baseline = {
+        "super_important_average_precision": 0.1,
+        "relevance_average_precision": 1.0,
+        "recall_at_10": 0.0,
+        "recall_at_25": 0.0,
+        "recall_at_50": 0.0,
+    }
+    passing = {
+        **baseline,
+        "super_important_average_precision": 0.2,
+        "relevance_average_precision": 0.99,
+        "recall_at_25": 0.1,
+    }
+
+    assert eval_models.super_important_rollout_gate_passes(baseline, passing)
+    assert not eval_models.super_important_rollout_gate_passes(
+        baseline,
+        {**passing, "relevance_average_precision": 0.989},
+    )
+    assert not eval_models.super_important_rollout_gate_passes(
+        baseline,
+        {**passing, "super_important_average_precision": 0.1},
+    )
+    assert not eval_models.super_important_rollout_gate_passes(
+        baseline,
+        {**passing, "recall_at_25": 0.0},
+    )
+
+
+def test_bonus_selection_breaks_metric_ties_toward_smaller_bonus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def combine(
+        relevance: np.ndarray,
+        preference: np.ndarray,
+        bonus_strength: float,
+    ) -> np.ndarray:
+        return np.full_like(relevance, bonus_strength, dtype=float)
+
+    def metrics(articles: list[Article], scores: np.ndarray) -> dict[str, float]:
+        bonus = float(scores[0])
+        preference_ap = 0.1 if bonus == 99 else 0.2
+        return {
+            "super_important_average_precision": preference_ap,
+            "relevance_average_precision": 0.95,
+            "recall_at_10": 0.0 if bonus == 99 else 0.1,
+            "recall_at_25": 0.0 if bonus == 99 else 0.1,
+            "recall_at_50": 0.0 if bonus == 99 else 0.1,
+        }
+
+    monkeypatch.setattr(eval_models, "SUPER_IMPORTANT_BONUS_GRID", (0.05, 0.1))
+    monkeypatch.setattr(
+        eval_models.relevance_embedding,
+        "combine_probabilities",
+        combine,
+    )
+    monkeypatch.setattr(
+        eval_models,
+        "compute_super_important_ranking_metrics",
+        metrics,
+    )
+
+    selected, _, _ = eval_models.select_super_important_bonus(
+        [],
+        np.array([99.0]),
+        np.array([0.5]),
+        np.array([0.5]),
+    )
+
+    assert selected == 0.05
+
+    monkeypatch.setattr(
+        eval_models,
+        "compute_super_important_ranking_metrics",
+        lambda articles, scores: metrics(articles, np.array([99.0])),
+    )
+    selected, _, _ = eval_models.select_super_important_bonus(
+        [],
+        np.array([99.0]),
+        np.array([0.5]),
+        np.array([0.5]),
+    )
+    assert selected is None
 
 
 def test_ranking_metrics_reject_malformed_scores() -> None:

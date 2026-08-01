@@ -1,6 +1,6 @@
 # Dedicated super-important ranker plan
 
-**Status:** Implementation complete; live benchmark and rollout pending — 2026-08-01
+**Status:** Bonus tuning in progress after the first live benchmark — 2026-08-01
 
 ## 1. Brief
 
@@ -86,7 +86,26 @@ Implementation outcome: the benchmark uses the newest 20% of mature labels as th
 - Report positive prevalence, average precision for explicit preference among read entries, precision and recall at top 10/25/50, graded NDCG@10/25/50 (`downvoted=0`, ordinary read=1`, explicit preference=2`), and normal good-vs-bad average precision as a guardrail.
 - Report counts for upvoted-only, starred-only, and both-positive subgroups. Treat this as an offline benchmark; do not apply current age/freshness decay to historical articles.
 
-A successful benchmark is required before changing the production image or manifest. The code change itself will make the two-head model the only artifact family inference accepts, so deployment must train it before scheduling inference.
+A successful benchmark is required before changing the production image or manifest. The first live run showed that direct multiplication improved explicit-preference AP from 0.0821 to 0.3164 and top-50 recall from 0 to 0.1525, but reduced general relevance AP from 0.9615 to 0.8521, so rollout stopped.
+
+### Deterministic bonus tuning
+
+Replace direct multiplication with a bounded bonus:
+
+```text
+rank = P(good) × (1 + bonus × P(explicit preference | read)) / (1 + bonus)
+```
+
+The denominator keeps the score in `[0, 1]` and does not change ordering. Tune only the single nonnegative `bonus` value; no autoresearch loop is needed.
+
+- Use a fixed chronological train/validation/test split over mature labels.
+- Evaluate a small fixed bonus grid on validation probabilities from one model fit.
+- Keep only candidates whose general relevance AP is within 0.01 of the weighted baseline and whose explicit-preference AP and at least one top-K recall improve.
+- Choose the highest explicit-preference AP; break ties toward the smaller bonus.
+- Evaluate that one selected bonus once on the newest test partition. Deploy only if the same guardrail and improvement requirements pass there.
+- Freeze the selected bonus in the inference manifest. Do not retune automatically on each training run; rerun after a material model/label-policy change or a substantial increase in explicit-preference labels.
+
+The code change itself will make the two-head model the only artifact family inference accepts, so deployment must train it before scheduling inference.
 
 ## 4. File-by-file impact
 
@@ -134,8 +153,9 @@ No Miniflux UI change, additional model, dependency, or CronJob is needed. One F
 - [x] Implement the versioned two-head artifact, one-pass training/inference path, and model-keyed probability upsert.
 - [x] Add focused tests and the offline chronological benchmark.
 - [x] Run format, tests, Ruff, and mypy. Final local result: 39 tests passed; Ruff and mypy passed.
-- [ ] Run the live benchmark and decide whether the model clears the stated guardrails. Local execution was unavailable because this worktree has no CUDA device or cached encoder; run it in the deployed GPU environment.
-- [ ] If it clears, update the infrastructure manifest in its own clean task worktree, build/train once, and perform controlled inference.
+- [x] Run the first live benchmark. Direct multiplication improved explicit-preference ranking but failed the 0.01 relevance-AP guardrail, so it was not deployed.
+- [ ] Implement deterministic bounded-bonus tuning and rerun chronological validation/test benchmarks.
+- [ ] If the tuned bonus clears both partitions, update the infrastructure manifest, train once, and perform controlled inference.
 - [x] Update durable documentation for the implemented behavior in `docs/super-important-ranker.md` and `docs/README.md`.
 - [ ] After the benchmark and rollout decision, mark this plan completed.
 
@@ -144,4 +164,5 @@ No Miniflux UI change, additional model, dependency, or CronJob is needed. One F
 - Assumption: normal read, unstarred, neutral-vote articles are acceptable pragmatic negatives for “super-important.” No new user labels are introduced in version one.
 - Confirmed: the current `entries.score` ordering is the intended consumer. The two-head result replaces the raw relevance ranking in memory; the separate importance probability is stored for inspection and possible future UI use, but is not displayed in this version.
 - Assumption: top-10, top-25, and top-50 are useful initial review budgets; they are benchmark reporting points, not hard product limits.
-- The implementation should not proceed to production deployment if the chronological benchmark does not show a measured improvement.
+- Confirmed: a general relevance AP drop larger than 0.01 versus the weighted baseline blocks rollout.
+- The implementation should not proceed to production deployment if the chronological benchmark does not show a measured improvement within that guardrail.
