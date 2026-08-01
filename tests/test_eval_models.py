@@ -204,3 +204,30 @@ def test_insert_model_eval_maps_nullable_model_specific_metrics(
     assert captured["metrics_rps"] is None
     assert captured["metrics_weighted_kappa"] is None
     assert captured["metrics_log_duration_mae"] is None
+    assert captured["metrics_super_important_average_precision"] is None
+
+    captured.clear()
+    asyncio.run(
+        dr.insert_model_eval(
+            datetime.date(2026, 8, 1),
+            "Super-important",
+            {"super_important": 10, "ordinary_read": 20, "bad": 30},
+            {"super_important": 5, "ordinary_read": 10, "bad": 15},
+            {
+                "super_important_average_precision": 0.8,
+                "relevance_average_precision": 0.9,
+                "recall_at_10": 0.2,
+                "recall_at_25": 0.4,
+                "recall_at_50": 0.6,
+                "super_important_bonus": 0.5,
+            },
+        )
+    )
+
+    assert captured["metrics_super_important_average_precision"] == 0.8
+    assert captured["metrics_relevance_average_precision"] == 0.9
+    assert captured["metrics_recall_at_10"] == 0.2
+    assert captured["metrics_recall_at_25"] == 0.4
+    assert captured["metrics_recall_at_50"] == 0.6
+    assert captured["metrics_super_important_bonus"] == 0.5
+    assert captured["metrics_accuracy"] is None

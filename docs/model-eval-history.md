@@ -1,18 +1,19 @@
 # Model Evaluation History
 
-Feedoscope's weekly `make eval` job evaluates relevance, urgency, and
-freshness, then stores each result in two places:
+Feedoscope's weekly `make eval` job evaluates four models—Relevance,
+Super-important, Urgency, and Freshness—and stores each result in two places:
 
 - `models/eval_history.json`, kept for the existing file-based history.
 - Miniflux's `model_evals` PostgreSQL table, used as the durable history that
   Miniflux can display later.
 
-## Database Ownership
+## Database Ownership and Deployment
 
-The `model_evals` table is created and migrated by Miniflux, not Feedoscope.
-Miniflux owns this schema because it reads the durable history on its AI Metrics
-page. Deploy the Miniflux migration before deploying Feedoscope code that writes
-the new freshness metrics; otherwise the insert cannot find the new columns.
+Miniflux creates and migrates `model_evals` because it displays the durable
+history on its AI Metrics page. Deploy Miniflux first so its migration adds the
+Super-important metric columns, then deploy Feedoscope so the weekly job can
+write those columns. Deploying Feedoscope first causes its insert to fail
+against the older table.
 
 ## Stored Shape
 
@@ -20,6 +21,9 @@ Each eval run inserts one row per evaluated model. `training` and `eval` are
 JSONB objects because the class names differ by model:
 
 - Relevance uses `good` and `bad` counts.
+- Super-important uses `good`, `bad`, `super_important`, and `ordinary_read`
+  counts. Its row trains on the oldest 80% of mature labels and evaluates the
+  newest 20%.
 - Urgency uses `urgent` and `evergreen` counts.
 - Freshness uses `fresh_d`, `fresh_m`, and `fresh_y` counts.
 
@@ -29,17 +33,33 @@ Relevance and urgency retain these binary-classification metric columns:
 - `metrics_f1`, `metrics_roc_auc`, `metrics_average_precision`,
   `metrics_log_loss`
 
+Super-important uses its own nullable columns:
+
+- `metrics_super_important_average_precision`
+- `metrics_relevance_average_precision`
+- `metrics_recall_at_10`, `metrics_recall_at_25`, `metrics_recall_at_50`
+- `metrics_super_important_bonus`
+
+The bonus is the fixed `SUPER_IMPORTANT_BONUS` used for that evaluation, so old
+rows remain interpretable if the configured value later changes.
+
 Freshness reuses `metrics_f1` for Macro F1 and `metrics_roc_auc` for Long-lived
-AUC. Its ordinal metrics use the new nullable columns:
+AUC. Its ordinal metrics use these nullable columns:
 
 - `metrics_rps`
 - `metrics_weighted_kappa`
 - `metrics_log_duration_mae`
 
 All metric columns are nullable so a model writes only metrics that apply.
-Freshness leaves binary-only metrics null; relevance and urgency leave the new
-ordinal columns null. Long-lived AUC and weighted kappa are also null when they
-cannot be calculated from the evaluation labels.
+
+## Super-important Metrics
+
+| Metric | Meaning | Better direction |
+|---|---|---|
+| Preference AP | How well the combined score ranks explicitly preferred articles above ordinary read articles among read evaluation articles. | Higher. |
+| Relevance AP | Whether the combined score still ranks readable articles above downvoted articles. | Higher. |
+| Recall@10/25/50 | Share of all super-important evaluation articles in the first 10, 25, or 50 ranked results. | Higher. |
+| Bonus | Fixed preference-probability adjustment used for this row. | Not a quality metric. |
 
 ## Freshness Evaluation
 
@@ -58,13 +78,19 @@ size or the classifier cannot be fitted.
 
 ## AI Metrics page
 
-Miniflux shows Freshness after Relevance and Urgency. Its Freshness section uses
-RPS, Macro F1, and quadratic weighted kappa in the trend chart, and shows all
-five freshness metrics in the latest-values and history table. Missing nullable
-values display as `-` and are omitted from chart lines.
+Miniflux orders known sections as Relevance, Super-important, Urgency, and
+Freshness; unknown model names follow in alphabetical order. The
+Super-important section shows Preference AP, Relevance AP, and Recall@50 in its
+trend chart. Its latest values and history table also show Recall@10, Recall@25,
+the fixed bonus, and the training and evaluation class counts. The page gives a
+plain-language explanation for every Super-important metric.
+
+Freshness uses RPS, Macro F1, and quadratic weighted kappa in the trend chart,
+and shows all five freshness metrics in its latest-values and history table.
+Missing nullable values display as `-` and are omitted from chart lines.
 
 ## Failure Behavior
 
 The eval job writes the JSON history first, then inserts into `model_evals`.
 PostgreSQL insert failures are not swallowed: the eval job fails visibly if the
-Miniflux table is unavailable.
+Miniflux table is unavailable or has not been migrated.

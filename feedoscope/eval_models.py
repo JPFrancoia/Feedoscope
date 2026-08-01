@@ -660,6 +660,7 @@ async def eval_super_important(device: torch.device) -> None:
     window_results: list[
         tuple[Mapping[str, float], Mapping[float, Mapping[str, float]]]
     ] = []
+    fixed_bonus_metrics: dict[str, float] | None = None
     for name, fit_articles, fit_embeddings, eval_articles, eval_embeddings in windows:
         weighted_classifier, relevance_classifier, preference_classifier = (
             _fit_super_important_rankers(fit_embeddings, fit_articles)
@@ -692,6 +693,42 @@ async def eval_super_important(device: torch.device) -> None:
         )
         for bonus, metrics in candidates.items():
             logger.info(f"[Super-important][{name}][bonus={bonus}] {metrics}")
+
+        if name == "window_2":
+            fixed_bonus_scores = relevance_embedding.combine_probabilities(
+                relevance_probabilities,
+                preference_probabilities,
+                bonus_strength=config.SUPER_IMPORTANT_BONUS,
+            )
+            fixed_bonus_metrics = compute_super_important_ranking_metrics(
+                eval_articles,
+                fixed_bonus_scores,
+            )
+            logger.info(
+                "[Super-important][window_2][fixed_bonus="
+                f"{config.SUPER_IMPORTANT_BONUS}] {fixed_bonus_metrics}"
+            )
+
+    assert fixed_bonus_metrics is not None
+    await save_eval_results(
+        model_name="Super-important",
+        training_counts=_super_important_partition_counts(
+            train_articles + middle_articles
+        ),
+        eval_counts=_super_important_partition_counts(newest_articles),
+        metrics={
+            "super_important_average_precision": fixed_bonus_metrics[
+                "super_important_average_precision"
+            ],
+            "relevance_average_precision": fixed_bonus_metrics[
+                "relevance_average_precision"
+            ],
+            "recall_at_10": fixed_bonus_metrics["recall_at_10"],
+            "recall_at_25": fixed_bonus_metrics["recall_at_25"],
+            "recall_at_50": fixed_bonus_metrics["recall_at_50"],
+            "super_important_bonus": config.SUPER_IMPORTANT_BONUS,
+        },
+    )
 
     selected_bonus = select_bonus_passing_all_windows(window_results)
     if selected_bonus is None:

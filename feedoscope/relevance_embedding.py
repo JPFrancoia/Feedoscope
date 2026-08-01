@@ -37,6 +37,7 @@ TWO_HEAD_TRAIN_COUNT_KEYS = {
     "super_important",
     "ordinary_read",
 }
+SUPER_IMPORTANT_DECISION_THRESHOLD = 0.5
 ENCODER_CACHE_ROOT = Path("models/relevance_encoder")
 ENCODER_READY_FILENAME = ".snapshot_complete"
 
@@ -434,14 +435,20 @@ def combine_probabilities(
     super_important_probabilities: np.ndarray,
     bonus_strength: float,
 ) -> np.ndarray:
-    """Apply a bounded preference bonus while keeping relevance as the base."""
+    """Apply a bounded preference bonus above the classifier decision threshold."""
     if relevance_probabilities.shape != super_important_probabilities.shape:
         raise ValueError("Relevance and super-important probabilities must align.")
     if not math.isfinite(bonus_strength) or bonus_strength < 0:
         raise ValueError("bonus_strength must be finite and nonnegative.")
+    preference_signal = np.clip(
+        (super_important_probabilities - SUPER_IMPORTANT_DECISION_THRESHOLD)
+        / (1 - SUPER_IMPORTANT_DECISION_THRESHOLD),
+        0,
+        1,
+    )
     return (
         relevance_probabilities
-        * (1 + bonus_strength * super_important_probabilities)
+        * (1 + bonus_strength * preference_signal)
         / (1 + bonus_strength)
     )
 

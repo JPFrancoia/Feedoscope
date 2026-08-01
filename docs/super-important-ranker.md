@@ -35,14 +35,20 @@ used. Training requires both explicitly preferred and ordinary read examples.
 Inference calculates the score in floating point before any freshness decay:
 
 ```text
-raw rank = P(good) × P(explicit preference | read)
+preference signal = max(0, (P(explicit preference | read) - 0.5) / 0.5)
+raw rank = P(good) × (1 + bonus × preference signal) / (1 + bonus)
 final rank = semantic-freshness decay(raw rank)
 ```
 
-The raw multiplication prevents a high super-important score from lifting an
-article whose general relevance score is low. Feedoscope rounds only when it
-writes the final integer `entries.score`; semantic freshness therefore receives
-the unrounded combined score.
+Predictions at or below the classifier's 50% decision boundary have no ranking
+effect. Above 50%, the preference signal rises linearly to its full value at
+100%, avoiding a hard score jump. The bounded bonus cannot raise the raw rank
+above `P(good)`.
+
+Feedoscope keeps the rank in floating point through semantic-freshness decay,
+then rounds and writes final integer `entries.score` values in transactions of
+1,000 articles. Each transaction commits before the next batch starts, limiting
+the WAL and rollback cost of large refreshes.
 
 ## Artifact compatibility
 
@@ -75,30 +81,50 @@ upsert the raw second-head probability before final-score writing or decay.
 remain separate; the table stores the preference-head output, not the final
 combined-and-decayed `entries.score`.
 
-## Offline benchmark and rollout gate
+## Weekly benchmark, history, and rollout gate
 
-`make eval` also runs a super-important offline benchmark. It combines read and
-downvoted training articles, excludes labels read within the most recent 40
-days, orders the remaining labels by `last_read` and article ID, and holds out
-the newest 20%. It skips the benchmark when either partition lacks at least 10
-required examples or the holdout has fewer than 50 articles.
+`make eval` uses mature labels only: labels read in the last 40 days are
+excluded. It orders the rest by `last_read` and article ID, then splits them
+into oldest 60%, middle 20%, and newest 20% partitions. It skips the
+super-important evaluation when any partition lacks the required `bad`,
+`super_important`, or `ordinary_read` examples, or is smaller than the largest
+ranking budget.
 
-The fixed holdout compares three raw, undecayed scorers:
+Each successful run writes one `Super-important` row to Miniflux's
+`model_evals` history. The row fits the rankers on the oldest 80% (the first
+two partitions), evaluates the newest 20%, and records the fixed
+`SUPER_IMPORTANT_BONUS` used for that score. It includes preference AP,
+relevance AP, Recall@10, Recall@25, Recall@50, the bonus, and training and
+evaluation counts for `good`, `bad`, `super_important`, and `ordinary_read`.
 
-- the old weighted relevance baseline (weight 20 for explicit preferences)
-- unweighted relevance alone
-- the two-head multiplied score
+The rolling tuner remains separate from this history row. It compares the old
+weighted-relevance baseline and every quarter-step bonus from 0 through 3
+across two chronological windows (60%→20% and 80%→20%). It logs AP, precision,
+recall, and NDCG diagnostics, and logs whether a bonus passes the rollout gate.
+It selects the smallest passing bonus; it does not change
+`SUPER_IMPORTANT_BONUS` or write additional history rows. A passing bonus must
+improve preference AP in both windows, keep relevance AP within 0.01 of the
+baseline in both windows, and improve Recall@10, @25, or @50 in at least one
+window.
 
-It logs explicit-preference prevalence and average precision among read
-articles; precision, recall, and graded NDCG at 10, 25, and 50; relevance
-average precision as a guardrail; and counts for upvoted-only, starred-only,
-and both-positive holdout examples. Graded NDCG uses downvoted = 0, ordinary
-read = 1, and explicitly preferred = 2. These benchmark results are log output
-only and do not change the shared `model_evals` schema.
+## Recorded rollout and future retuning
 
-The rollout gate is a live chronological benchmark that improves
-explicit-preference average precision and at least one realistic top-K recall
-without a material regression in relevance average precision. The live
-benchmark has **not** yet been completed. The production manifest rollout has
-also **not** yet been completed; do not schedule two-head inference until a
-new two-head artifact has been trained and the gate has passed.
+The deployed image is `9328daa` with `SUPER_IMPORTANT_BONUS=0.5`. Controlled
+training used 6,323 good, 1,357 bad, and 194 super-important labels. Controlled
+inference wrote 8,721 `super_important_inference` rows.
+
+Bonus 0.5 was the smallest value that passed the rolling gate. In the older
+window, preference AP changed from 0.0173 to 0.0175 and relevance AP from
+0.9706 to 0.9721. In the newer window, preference AP changed from 0.0821 to
+0.2660, relevance AP from 0.9615 to 0.9603, and the top 50 changed from zero
+to 20 super-important articles. The newer-window recall gain is sufficient for
+the gate; the older window had only 17 preference positives for training, so
+requiring a top-50 gain in each window was not stable.
+
+Do not retune during scheduled training. Retune only after a substantial
+increase in explicit-preference labels: run `make eval`, review the logged
+results for both chronological windows against the gate above, and use its
+smallest passing bonus. If the selected value changes, set
+`SUPER_IMPORTANT_BONUS` to that value in the versioned deployment manifest,
+then run controlled training and inference before deploying it. Record the new
+value, label counts, and controlled-inference row count in this section.

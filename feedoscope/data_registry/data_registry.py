@@ -22,6 +22,8 @@ from feedoscope.entities import (
 
 logger = logging.getLogger(__name__)
 
+SCORE_UPDATE_BATCH_SIZE = 1000
+
 
 # For explanation about type hinting, see:
 # https://www.psycopg.org/psycopg3/docs/advanced/typing.html#generic-pool-types
@@ -271,16 +273,26 @@ async def update_scores(
         scores: List of scores to set for the articles.
 
     """
+    if len(article_ids) != len(scores):
+        raise ValueError("article_ids and scores must align")
+
     scores_query = _get_query_from_file("update_scores.sql")
 
     async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.executemany(
-            scores_query,
-            [
+        for start in range(0, len(article_ids), SCORE_UPDATE_BATCH_SIZE):
+            end = start + SCORE_UPDATE_BATCH_SIZE
+            rows = [
                 {"score": score, "int_id": int_id}
-                for score, int_id in zip(scores, article_ids)
-            ],
-        )
+                for score, int_id in zip(
+                    scores[start:end], article_ids[start:end], strict=True
+                )
+            ]
+            await cur.executemany(scores_query, rows)
+            await conn.commit()
+            logger.info(
+                f"Updated article scores {start + 1}-{min(end, len(article_ids))}/"
+                f"{len(article_ids)}."
+            )
 
 
 async def insert_model_eval(
@@ -322,6 +334,16 @@ async def insert_model_eval(
                 "metrics_rps": metrics.get("rps"),
                 "metrics_weighted_kappa": metrics.get("weighted_kappa"),
                 "metrics_log_duration_mae": metrics.get("log_duration_mae"),
+                "metrics_super_important_average_precision": metrics.get(
+                    "super_important_average_precision"
+                ),
+                "metrics_relevance_average_precision": metrics.get(
+                    "relevance_average_precision"
+                ),
+                "metrics_recall_at_10": metrics.get("recall_at_10"),
+                "metrics_recall_at_25": metrics.get("recall_at_25"),
+                "metrics_recall_at_50": metrics.get("recall_at_50"),
+                "metrics_super_important_bonus": metrics.get("super_important_bonus"),
             },
         )
 

@@ -91,7 +91,14 @@ def decay_relevance_score(
 
 
 async def main() -> None:
+    init_logging(config.LOGGING_CONFIG)
+    logger.info(
+        f"Starting inference: lookback={LOOKBACK_DAYS}d, sampling={SAMPLING}, "
+        f"decay={config.RELEVANCE_DECAY_BACKEND}"
+    )
+    logger.info("Opening database pool...")
     await dr.global_pool.open(wait=True)
+    logger.info("Database pool opened.")
     try:
         urgency_model_key = llm_infer_urgency.get_active_model_key()
         logger.info(f"Active urgency model key: {urgency_model_key}")
@@ -231,5 +238,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    init_logging(config.LOGGING_CONFIG)
     asyncio.run(main())

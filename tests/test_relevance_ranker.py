@@ -33,9 +33,9 @@ def test_explicit_preference_label_uses_star_or_upvote() -> None:
     )
 
 
-def test_combined_score_applies_a_bounded_preference_bonus() -> None:
-    relevance = np.array([0.9, 0.7])
-    preference = np.array([0.1, 0.8])
+def test_combined_score_applies_bonus_only_above_decision_threshold() -> None:
+    relevance = np.array([0.95, 0.6, 0.7, 0.7, 0.7])
+    preference = np.array([0.2, 0.3, 0.5, 0.6, 1.0])
 
     np.testing.assert_allclose(
         relevance_embedding.combine_probabilities(
@@ -51,7 +51,7 @@ def test_combined_score_applies_a_bounded_preference_bonus() -> None:
             preference,
             bonus_strength=1,
         ),
-        relevance * (1 + preference) / 2,
+        relevance * (1 + np.array([0.0, 0.0, 0.0, 0.2, 1.0])) / 2,
     )
     with pytest.raises(ValueError, match="must align"):
         relevance_embedding.combine_probabilities(
@@ -153,6 +153,146 @@ def test_chronological_split_excludes_unsettled_labels() -> None:
     assert [article.article_id for article in training] == list(range(6))
     assert [article.article_id for article in validation] == [6, 7]
     assert [article.article_id for article in test] == [8, 9]
+
+
+def test_super_important_eval_saves_fixed_bonus_performance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    articles = [
+        cast(
+            Article,
+            SimpleNamespace(
+                article_id=article_id,
+                last_read=datetime(2020, 1, 1, tzinfo=timezone.utc)
+                + timedelta(hours=article_id),
+                status="read" if article_id % 3 < 2 else "unread",
+                vote=(1, 0, -1)[article_id % 3],
+                starred=False,
+            ),
+        )
+        for article_id in range(10)
+    ]
+
+    fixed_metrics = {
+        "positive_prevalence": 0.4,
+        "super_important_average_precision": 0.8,
+        "relevance_average_precision": 0.9,
+        "precision_at_10": 0.2,
+        "recall_at_10": 0.3,
+        "ndcg_at_10": 0.4,
+        "precision_at_25": 0.2,
+        "recall_at_25": 0.5,
+        "ndcg_at_25": 0.6,
+        "precision_at_50": 0.2,
+        "recall_at_50": 0.7,
+        "ndcg_at_50": 0.8,
+    }
+    saved: dict[str, object] = {}
+    bonuses: list[float] = []
+    evaluated_article_ids: list[int] = []
+
+    async def get_articles(validation_size: int = 0) -> list[Article]:
+        return articles
+
+    async def get_no_articles(validation_size: int = 0) -> list[Article]:
+        return []
+
+    async def encode_articles(*args: object, **kwargs: object) -> np.ndarray:
+        return np.arange(len(articles), dtype=float).reshape(-1, 1)
+
+    def predict(embeddings: np.ndarray, classifier: object) -> np.ndarray:
+        return np.full(len(embeddings), 0.5)
+
+    def combine(
+        relevance: np.ndarray,
+        preference: np.ndarray,
+        bonus_strength: float,
+    ) -> np.ndarray:
+        bonuses.append(bonus_strength)
+        return np.full(len(relevance), bonus_strength)
+
+    def select_bonus(
+        *args: object,
+    ) -> tuple[float, dict[float, dict[str, float]], dict[str, float]]:
+        return 0.5, {0.5: fixed_metrics}, fixed_metrics
+
+    def compute_metrics(rows: list[Article], scores: np.ndarray) -> dict[str, float]:
+        evaluated_article_ids.extend(article.article_id for article in rows)
+        return fixed_metrics
+
+    async def save_eval_results(**kwargs: object) -> None:
+        saved.update(kwargs)
+
+    monkeypatch.setattr(eval_models.config, "SUPER_IMPORTANT_BONUS", 0.5)
+    monkeypatch.setattr(eval_models, "MIN_SUPER_IMPORTANT_EXAMPLES", 0)
+    monkeypatch.setattr(eval_models, "SUPER_IMPORTANT_RANKING_BUDGETS", (1,))
+    monkeypatch.setattr(dr, "get_read_articles_training", get_articles)
+    monkeypatch.setattr(dr, "get_published_articles", get_no_articles)
+    monkeypatch.setattr(
+        eval_models.relevance_embedding,
+        "load_encoder",
+        lambda *args, **kwargs: (object(), object()),
+    )
+    monkeypatch.setattr(
+        eval_models.relevance_embedding,
+        "encode_articles",
+        encode_articles,
+    )
+    monkeypatch.setattr(
+        eval_models,
+        "_fit_super_important_rankers",
+        lambda *args: (object(), object(), object()),
+    )
+    monkeypatch.setattr(
+        eval_models.relevance_embedding,
+        "predict_probabilities_from_embeddings",
+        predict,
+    )
+    monkeypatch.setattr(
+        eval_models.relevance_embedding,
+        "combine_probabilities",
+        combine,
+    )
+    monkeypatch.setattr(eval_models, "select_super_important_bonus", select_bonus)
+    monkeypatch.setattr(
+        eval_models,
+        "select_bonus_passing_all_windows",
+        lambda results: 0.5,
+    )
+    monkeypatch.setattr(
+        eval_models,
+        "compute_super_important_ranking_metrics",
+        compute_metrics,
+    )
+    monkeypatch.setattr(eval_models, "save_eval_results", save_eval_results)
+
+    asyncio.run(eval_models.eval_super_important(eval_models.torch.device("cpu")))
+
+    assert bonuses == [0.5]
+    assert evaluated_article_ids == [8, 9]
+    assert saved == {
+        "model_name": "Super-important",
+        "training_counts": {
+            "good": 6,
+            "bad": 2,
+            "super_important": 3,
+            "ordinary_read": 3,
+        },
+        "eval_counts": {
+            "good": 1,
+            "bad": 1,
+            "super_important": 1,
+            "ordinary_read": 0,
+        },
+        "metrics": {
+            "super_important_average_precision": 0.8,
+            "relevance_average_precision": 0.9,
+            "recall_at_10": 0.3,
+            "recall_at_25": 0.5,
+            "recall_at_50": 0.7,
+            "super_important_bonus": 0.5,
+        },
+    }
 
 
 def test_ranking_metrics_reward_super_important_first() -> None:
@@ -372,3 +512,64 @@ def test_super_important_upsert_uses_model_key_and_raw_probability(
             "super_important_score": 0.625,
         }
     ]
+
+
+def test_score_updates_commit_bounded_batches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batches: list[list[dict[str, object]]] = []
+    commits: list[None] = []
+
+    class Cursor(AbstractAsyncContextManager["Cursor"]):
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def executemany(
+            self,
+            query: str,
+            rows: list[dict[str, object]],
+        ) -> None:
+            assert query == "update_scores.sql"
+            batches.append(rows)
+
+    class Connection(AbstractAsyncContextManager["Connection"]):
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+        async def commit(self) -> None:
+            commits.append(None)
+
+    class Pool:
+        def connection(self) -> Connection:
+            return Connection()
+
+    monkeypatch.setattr(dr, "global_pool", Pool())
+    monkeypatch.setattr(dr, "SCORE_UPDATE_BATCH_SIZE", 2)
+    monkeypatch.setattr(dr, "_get_query_from_file", lambda filename: filename)
+
+    asyncio.run(
+        dr.update_scores(
+            article_ids=[1, 2, 3, 4, 5],
+            article_titles=["1", "2", "3", "4", "5"],
+            scores=[10, 20, 30, 40, 50],
+        )
+    )
+
+    assert batches == [
+        [{"score": 10, "int_id": 1}, {"score": 20, "int_id": 2}],
+        [{"score": 30, "int_id": 3}, {"score": 40, "int_id": 4}],
+        [{"score": 50, "int_id": 5}],
+    ]
+    assert len(commits) == 3
+
+    with pytest.raises(ValueError, match="must align"):
+        asyncio.run(
+            dr.update_scores(
+                article_ids=[1],
+                article_titles=["1"],
+                scores=[10, 20],
+            )
+        )
