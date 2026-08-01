@@ -1,6 +1,6 @@
 # Thresholded super-important bonus rollout plan
 
-**Status:** Age-block rollout in progress — 2026-08-01
+**Status:** Completed — 2026-08-01
 
 ## 1. Brief
 
@@ -77,8 +77,9 @@ No model retraining, schema migration, new dependency, or new configuration is r
 - [x] Build/push image `6475d27` and deploy it to every Feedoscope CronJob.
 - [x] Verify image `6475d27` through the next scheduled 8,715-article inference: text preparation logged every 10–30 seconds, score writes committed in nine batches, and PostgreSQL remained at 40% usage.
 - [x] Clear 904 stale positive scores from unread downvoted articles immediately; add startup cleanup so future downvotes cannot retain old rank scores after inference runs.
-- [ ] Run one controlled age block on the final image to verify the new age-range path; the completed 365-day refresh makes rerunning every block unnecessary now.
-- [ ] Mark this plan completed with final rollout evidence.
+- [x] Run controlled block `[0, 30)` on final image `220a648`: 5,471 articles completed in 6m43s, progress appeared every 8–29 seconds, six score batches committed, downvoted scored rows remained zero, and PostgreSQL remained at 40% usage.
+- [x] Run `[365, 730)` for the only remaining stale top-score cohort: 8,513 articles completed in 5m38s and nine batches. The 537-day-old score-79 leader disappeared; the top 15 are now all 0–2 days old, with zero scored downvotes.
+- [x] Mark this plan completed. The successful full refresh plus one older block now covers 0–730 days; redundant blocks inside 0–365 were deliberately skipped.
 
 ## 8. Open questions / assumptions
 
