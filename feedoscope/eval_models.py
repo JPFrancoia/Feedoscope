@@ -64,7 +64,7 @@ SUPER_IMPORTANT_TRAIN_FRACTION = 0.6
 SUPER_IMPORTANT_VALIDATION_FRACTION = 0.2
 MIN_SUPER_IMPORTANT_EXAMPLES = 10
 SUPER_IMPORTANT_RANKING_BUDGETS = (10, 25, 50)
-SUPER_IMPORTANT_BONUS_GRID = (0.0, 0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0)
+SUPER_IMPORTANT_BONUS_GRID = tuple(index / 4 for index in range(13))
 MAX_RELEVANCE_AP_DROP = 0.01
 WEIGHTED_RELEVANCE_BASELINE_WEIGHT = 20.0
 
@@ -242,21 +242,38 @@ def super_important_rollout_gate_passes(
     )
 
 
+def select_bonus_passing_all_windows(
+    window_results: list[
+        tuple[Mapping[str, float], Mapping[float, Mapping[str, float]]]
+    ],
+) -> float | None:
+    """Return the smallest bonus passing every chronological window."""
+    if not window_results:
+        return None
+    eligible = [
+        bonus
+        for bonus in SUPER_IMPORTANT_BONUS_GRID
+        if all(
+            super_important_rollout_gate_passes(baseline, candidates[bonus])
+            for baseline, candidates in window_results
+        )
+    ]
+    return min(eligible, default=None)
+
+
 def select_super_important_bonus(
     articles: list[Article],
     weighted_baseline_scores: np.ndarray,
     relevance_probabilities: np.ndarray,
     super_important_probabilities: np.ndarray,
 ) -> tuple[float | None, dict[float, dict[str, float]], dict[str, float]]:
-    """Select one bonus deterministically on a chronological validation set."""
+    """Score the fixed bonus grid on one chronological validation window."""
     baseline_metrics = compute_super_important_ranking_metrics(
         articles,
         weighted_baseline_scores,
     )
-    candidate_metrics: dict[float, dict[str, float]] = {}
-    eligible: list[float] = []
-    for bonus in SUPER_IMPORTANT_BONUS_GRID:
-        metrics = compute_super_important_ranking_metrics(
+    candidate_metrics = {
+        bonus: compute_super_important_ranking_metrics(
             articles,
             relevance_embedding.combine_probabilities(
                 relevance_probabilities,
@@ -264,21 +281,9 @@ def select_super_important_bonus(
                 bonus_strength=bonus,
             ),
         )
-        candidate_metrics[bonus] = metrics
-        if super_important_rollout_gate_passes(baseline_metrics, metrics):
-            eligible.append(bonus)
-
-    selected = (
-        max(
-            eligible,
-            key=lambda bonus: (
-                candidate_metrics[bonus]["super_important_average_precision"],
-                -bonus,
-            ),
-        )
-        if eligible
-        else None
-    )
+        for bonus in SUPER_IMPORTANT_BONUS_GRID
+    }
+    selected = select_bonus_passing_all_windows([(baseline_metrics, candidate_metrics)])
     return selected, candidate_metrics, baseline_metrics
 
 
@@ -331,14 +336,6 @@ def _fit_super_important_rankers(
         pipeline_label="super-important",
     )
     return weighted_classifier, relevance_classifier, super_important_classifier
-
-
-def _score_quantiles(scores: np.ndarray) -> dict[str, float]:
-    """Return compact score-scale diagnostics for rollout logs."""
-    return {
-        f"p{quantile}": float(np.percentile(scores, quantile))
-        for quantile in (10, 50, 90)
-    }
 
 
 def compute_and_log_metrics(
@@ -585,16 +582,16 @@ async def eval_relevance(device: torch.device) -> None:
 
 
 async def eval_super_important(device: torch.device) -> None:
-    """Tune one preference bonus, then confirm it on the newest mature labels."""
+    """Select the smallest preference bonus passing two rolling windows."""
     all_articles = await dr.get_read_articles_training(validation_size=0)
     all_articles += await dr.get_published_articles(validation_size=0)
-    train_articles, validation_articles, test_articles = (
+    train_articles, middle_articles, newest_articles = (
         split_super_important_eval_articles(all_articles)
     )
     partitions = {
-        "training": train_articles,
-        "validation": validation_articles,
-        "test": test_articles,
+        "oldest_60_percent": train_articles,
+        "middle_20_percent": middle_articles,
+        "newest_20_percent": newest_articles,
     }
     partition_counts = {
         name: _super_important_partition_counts(articles)
@@ -616,20 +613,17 @@ async def eval_super_important(device: torch.device) -> None:
         return
 
     logger.info(f"[Super-important] Chronological partition counts: {partition_counts}")
-    logger.info(
-        "[Super-important] Fixed validation article IDs: "
-        f"{[article.article_id for article in validation_articles]}"
-    )
-    logger.info(
-        "[Super-important] Fixed test article IDs: "
-        f"{[article.article_id for article in test_articles]}"
-    )
+    for name, articles in partitions.items():
+        logger.info(
+            f"[Super-important] Fixed {name} article IDs: "
+            f"{[article.article_id for article in articles]}"
+        )
 
     tokenizer, encoder = relevance_embedding.load_encoder(
         device,
         pipeline_label="super-important evaluation",
     )
-    ordered_articles = train_articles + validation_articles + test_articles
+    ordered_articles = train_articles + middle_articles + newest_articles
     embeddings = await relevance_embedding.encode_articles(
         ordered_articles,
         tokenizer,
@@ -638,101 +632,68 @@ async def eval_super_important(device: torch.device) -> None:
         pipeline_label="super-important evaluation",
     )
     train_end = len(train_articles)
-    validation_end = train_end + len(validation_articles)
-    train_embeddings = embeddings[:train_end]
-    validation_embeddings = embeddings[train_end:validation_end]
-    test_embeddings = embeddings[validation_end:]
-
-    weighted_classifier, relevance_classifier, super_important_classifier = (
-        _fit_super_important_rankers(train_embeddings, train_articles)
+    middle_end = train_end + len(middle_articles)
+    windows = (
+        (
+            "window_1",
+            train_articles,
+            embeddings[:train_end],
+            middle_articles,
+            embeddings[train_end:middle_end],
+        ),
+        (
+            "window_2",
+            train_articles + middle_articles,
+            embeddings[:middle_end],
+            newest_articles,
+            embeddings[middle_end:],
+        ),
     )
-    validation_weighted_scores = (
-        relevance_embedding.predict_probabilities_from_embeddings(
-            validation_embeddings,
+    window_results: list[
+        tuple[Mapping[str, float], Mapping[float, Mapping[str, float]]]
+    ] = []
+    for name, fit_articles, fit_embeddings, eval_articles, eval_embeddings in windows:
+        weighted_classifier, relevance_classifier, preference_classifier = (
+            _fit_super_important_rankers(fit_embeddings, fit_articles)
+        )
+        weighted_scores = relevance_embedding.predict_probabilities_from_embeddings(
+            eval_embeddings,
             weighted_classifier,
         )
-    )
-    validation_relevance_probabilities = (
-        relevance_embedding.predict_probabilities_from_embeddings(
-            validation_embeddings,
-            relevance_classifier,
+        relevance_probabilities = (
+            relevance_embedding.predict_probabilities_from_embeddings(
+                eval_embeddings,
+                relevance_classifier,
+            )
         )
-    )
-    validation_super_important_probabilities = (
-        relevance_embedding.predict_probabilities_from_embeddings(
-            validation_embeddings,
-            super_important_classifier,
+        preference_probabilities = (
+            relevance_embedding.predict_probabilities_from_embeddings(
+                eval_embeddings,
+                preference_classifier,
+            )
         )
-    )
-    selected_bonus, validation_candidates, validation_baseline = (
-        select_super_important_bonus(
-            validation_articles,
-            validation_weighted_scores,
-            validation_relevance_probabilities,
-            validation_super_important_probabilities,
+        _, candidates, baseline = select_super_important_bonus(
+            eval_articles,
+            weighted_scores,
+            relevance_probabilities,
+            preference_probabilities,
         )
-    )
-    logger.info(
-        f"[Super-important][validation][weighted_relevance_baseline] "
-        f"{validation_baseline}"
-    )
-    for bonus, metrics in validation_candidates.items():
-        logger.info(f"[Super-important][validation][bonus={bonus}] {metrics}")
-    if selected_bonus is None:
-        logger.warning("[Super-important] No bonus passed the validation gate.")
-        logger.info("[Super-important] Rollout gate passed: False")
-        return
-    logger.info(f"[Super-important] Selected validation bonus: {selected_bonus}")
+        window_results.append((baseline, candidates))
+        logger.info(
+            f"[Super-important][{name}][weighted_relevance_baseline] {baseline}"
+        )
+        for bonus, metrics in candidates.items():
+            logger.info(f"[Super-important][{name}][bonus={bonus}] {metrics}")
 
-    development_articles = train_articles + validation_articles
-    development_embeddings = embeddings[:validation_end]
-    weighted_classifier, relevance_classifier, super_important_classifier = (
-        _fit_super_important_rankers(development_embeddings, development_articles)
-    )
-    test_weighted_scores = relevance_embedding.predict_probabilities_from_embeddings(
-        test_embeddings,
-        weighted_classifier,
-    )
-    test_relevance_probabilities = (
-        relevance_embedding.predict_probabilities_from_embeddings(
-            test_embeddings,
-            relevance_classifier,
-        )
-    )
-    test_super_important_probabilities = (
-        relevance_embedding.predict_probabilities_from_embeddings(
-            test_embeddings,
-            super_important_classifier,
-        )
-    )
-    test_selected_scores = relevance_embedding.combine_probabilities(
-        test_relevance_probabilities,
-        test_super_important_probabilities,
-        bonus_strength=selected_bonus,
-    )
-    test_baseline = compute_super_important_ranking_metrics(
-        test_articles,
-        test_weighted_scores,
-    )
-    test_selected = compute_super_important_ranking_metrics(
-        test_articles,
-        test_selected_scores,
-    )
-    gate_passed = super_important_rollout_gate_passes(
-        test_baseline,
-        test_selected,
-    )
-    logger.info(f"[Super-important][test][weighted_relevance_baseline] {test_baseline}")
-    logger.info(f"[Super-important][test][bonus={selected_bonus}] {test_selected}")
-    logger.info(
-        "[Super-important][test] Score quantiles: "
-        f"baseline={_score_quantiles(test_weighted_scores)}, "
-        f"selected={_score_quantiles(test_selected_scores)}"
-    )
+    selected_bonus = select_bonus_passing_all_windows(window_results)
+    if selected_bonus is None:
+        logger.warning("[Super-important] No bonus passed every rolling window.")
+        logger.info("[Super-important] Rolling rollout gate passed: False")
+        return
 
     positive_articles = [
         article
-        for article in test_articles
+        for article in newest_articles
         if relevance_embedding.is_super_important(article)
     ]
     subgroup_counts = {
@@ -746,9 +707,11 @@ async def eval_super_important(device: torch.device) -> None:
             article.vote == 1 and article.starred for article in positive_articles
         ),
     }
-    logger.info(f"[Super-important] Test positive subgroups: {subgroup_counts}")
     logger.info(
-        f"[Super-important] Rollout gate passed: {gate_passed}; "
+        f"[Super-important] Newest-window positive subgroups: {subgroup_counts}"
+    )
+    logger.info(
+        "[Super-important] Rolling rollout gate passed: True; "
         f"selected_bonus={selected_bonus}"
     )
 

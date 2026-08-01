@@ -208,6 +208,48 @@ def test_rollout_gate_enforces_ap_and_preference_improvements() -> None:
     )
 
 
+def test_rolling_bonus_selection_requires_every_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline = {
+        "super_important_average_precision": 0.1,
+        "relevance_average_precision": 1.0,
+        "recall_at_10": 0.0,
+        "recall_at_25": 0.0,
+        "recall_at_50": 0.0,
+    }
+    passing = {
+        **baseline,
+        "super_important_average_precision": 0.2,
+        "relevance_average_precision": 0.99,
+        "recall_at_10": 0.1,
+    }
+    failing = {**passing, "relevance_average_precision": 0.98}
+    monkeypatch.setattr(eval_models, "SUPER_IMPORTANT_BONUS_GRID", (0.0, 0.25, 0.5))
+
+    assert (
+        eval_models.select_bonus_passing_all_windows(
+            [
+                (baseline, {0.0: failing, 0.25: passing, 0.5: passing}),
+                (baseline, {0.0: failing, 0.25: passing, 0.5: failing}),
+            ]
+        )
+        == 0.25
+    )
+    assert (
+        eval_models.select_bonus_passing_all_windows(
+            [(baseline, {0.0: passing, 0.25: passing, 0.5: passing})]
+        )
+        == 0.0
+    )
+    assert (
+        eval_models.select_bonus_passing_all_windows(
+            [(baseline, {0.0: failing, 0.25: failing, 0.5: failing})]
+        )
+        is None
+    )
+
+
 def test_bonus_selection_breaks_metric_ties_toward_smaller_bonus(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

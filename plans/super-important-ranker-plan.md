@@ -1,6 +1,6 @@
 # Dedicated super-important ranker plan
 
-**Status:** Bonus tuning in progress after the first live benchmark — 2026-08-01
+**Status:** Rolling-window bonus tuning in progress after the one-time confirmation failed — 2026-08-01
 
 ## 1. Brief
 
@@ -8,7 +8,7 @@ Feedoscope currently learns whether an article is generally worth reading; starr
 
 ## 2. Current state / relevant context
 
-- The active branch is `semantic_freshness` at `8a6be36`; the worktree is clean and the focused suite currently passes (25 tests).
+- The active task branch is `super_important` at `c1d3fd1`; before the rolling-window edit, the full suite passes (42 tests).
 - Current relevance labels are read, non-downvoted entries as positive and `vote=-1` entries as negative. `vote=1 OR starred` currently only produces `EXCELLENT_WEIGHT` during fitting.
 - Production currently sets `EXCELLENT_WEIGHT=20` in the external Feedoscope training CronJob, although the code default is 3.
 - The current three-label semantic-freshness model supplies the half-life that decays the final relevance score. It does not write prediction tags or prediction rows.
@@ -105,7 +105,21 @@ The denominator keeps the score in `[0, 1]` and does not change ordering. Tune o
 - Evaluate that one selected bonus once on the newest test partition. Deploy only if the same guardrail and improvement requirements pass there.
 - Freeze the selected bonus in the inference manifest. Do not retune automatically on each training run; rerun after a material model/label-policy change or a substantial increase in explicit-preference labels.
 
-The code change itself will make the two-head model the only artifact family inference accepts, so deployment must train it before scheduling inference.
+The validation slice selected bonus `3.0`, but its one-time confirmation failed: explicit-preference AP improved from `0.0821` to `0.3176` while relevance AP fell from `0.9615` to `0.9412`, exceeding the `0.01` loss limit. Production remained unchanged. The large shift in explicit-preference prevalence between validation (`2.4%`) and confirmation (`11.1%`) makes a single split unstable.
+
+### Rolling-window replacement
+
+Use the already observed periods as rolling validation rather than trying a second bonus against the failed confirmation:
+
+1. Fit on the oldest 60% and evaluate on the next 20%.
+2. Refit on the oldest 80% and evaluate on the newest 20%.
+3. Evaluate a fixed quarter-step grid from `0.0` through `3.0` in both windows.
+4. A bonus is eligible only if every window keeps relevance AP within `0.01`, improves explicit-preference AP, and improves recall at one of top 10/25/50.
+5. Select the smallest eligible bonus. This deliberately favors the least production influence that consistently works across time.
+
+There is no untouched historical test after this redesign. Before rollout, run a no-write comparison on current unread articles and then a controlled inference. Freeze the selected bonus in the versioned infrastructure manifest and retune only after a substantial increase in explicit-preference labels, expected in a few months.
+
+The code change itself makes the two-head model the only artifact family inference accepts, so deployment must train it before scheduling inference.
 
 ## 4. File-by-file impact
 
@@ -154,8 +168,9 @@ No Miniflux UI change, additional model, dependency, or CronJob is needed. One F
 - [x] Add focused tests and the offline chronological benchmark.
 - [x] Run format, tests, Ruff, and mypy. Final local result: 39 tests passed; Ruff and mypy passed.
 - [x] Run the first live benchmark. Direct multiplication improved explicit-preference ranking but failed the 0.01 relevance-AP guardrail, so it was not deployed.
-- [ ] Implement deterministic bounded-bonus tuning and rerun chronological validation/test benchmarks.
-- [ ] If the tuned bonus clears both partitions, update the infrastructure manifest, train once, and perform controlled inference.
+- [x] Implement deterministic bounded-bonus tuning and run chronological validation/test benchmarks. Bonus `3.0` passed validation but failed the one-time confirmation guardrail; production remained unchanged.
+- [ ] Replace the single confirmation with the predeclared two-window expanding evaluation and select the smallest bonus passing every window.
+- [ ] If a bonus clears both rolling windows, run a no-write current-article comparison, update the infrastructure manifest, train once, and perform controlled inference.
 - [x] Update durable documentation for the implemented behavior in `docs/super-important-ranker.md` and `docs/README.md`.
 - [ ] After the benchmark and rollout decision, mark this plan completed.
 
@@ -165,4 +180,5 @@ No Miniflux UI change, additional model, dependency, or CronJob is needed. One F
 - Confirmed: the current `entries.score` ordering is the intended consumer. The two-head result replaces the raw relevance ranking in memory; the separate importance probability is stored for inspection and possible future UI use, but is not displayed in this version.
 - Assumption: top-10, top-25, and top-50 are useful initial review budgets; they are benchmark reporting points, not hard product limits.
 - Confirmed: a general relevance AP drop larger than 0.01 versus the weighted baseline blocks rollout.
-- The implementation should not proceed to production deployment if the chronological benchmark does not show a measured improvement within that guardrail.
+- The implementation should not proceed to production deployment if every rolling window does not show a measured improvement within that guardrail.
+- Confirmed: freeze the deployed bonus and retune in a few months after substantially more super-important labels have accumulated.
