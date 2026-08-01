@@ -1,4 +1,4 @@
-"""Weekly evaluation of relevance and urgency models.
+"""Weekly evaluation of relevance, urgency, and freshness models.
 
 For each model, trains on a subset of the data with a holdout set,
 runs inference on the holdout, logs classification metrics, then discards
@@ -9,9 +9,11 @@ If VALIDATION_SIZE is 0, the eval is skipped entirely.
 """
 
 import asyncio
+from collections.abc import Mapping
 import datetime
 import json
 import logging
+import math
 import os
 import random
 import shutil
@@ -22,6 +24,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
+    cohen_kappa_score,
     f1_score,
     log_loss,
     precision_score,
@@ -38,6 +41,7 @@ from feedoscope import (
     llm_learn,
     llm_learn_urgency,
     relevance_embedding,
+    semantic_freshness_embedding,
     urgency_embedding,
 )
 from feedoscope.data_registry import data_registry as dr
@@ -70,6 +74,60 @@ def _clean_stale_eval_dirs() -> None:
                 f"Found stale eval directory {path} from a previous run. Removing."
             )
             shutil.rmtree(path, ignore_errors=True)
+
+
+def compute_freshness_metrics(
+    true_labels: np.ndarray,
+    predicted_probs: np.ndarray,
+) -> dict[str, float | None]:
+    """Compute metrics for ordered three-label freshness predictions."""
+    true_labels = np.asarray(true_labels, dtype=int)
+    predicted_probs = np.asarray(predicted_probs, dtype=float)
+    predicted_labels = predicted_probs.argmax(axis=1)
+    true_probabilities = np.eye(len(semantic_freshness_embedding.HORIZONS))[true_labels]
+    rps = np.mean(
+        np.square(
+            np.cumsum(predicted_probs, axis=1)[:, :-1]
+            - np.cumsum(true_probabilities, axis=1)[:, :-1]
+        )
+    )
+    predicted_lifetimes = semantic_freshness_embedding.expected_lifetime_days(
+        predicted_probs
+    )
+    true_lifetimes = semantic_freshness_embedding.REPRESENTATIVE_DAYS[true_labels]
+    long_lived = (true_labels == len(semantic_freshness_embedding.HORIZONS) - 1).astype(
+        int
+    )
+    long_lived_auc = (
+        float(roc_auc_score(long_lived, predicted_probs[:, -1]))
+        if np.unique(long_lived).size == 2
+        else None
+    )
+    weighted_kappa = (
+        cohen_kappa_score(true_labels, predicted_labels, weights="quadratic")
+        if np.unique(np.concatenate((true_labels, predicted_labels))).size > 1
+        else math.nan
+    )
+
+    return {
+        "rps": float(rps),
+        "macro_f1": float(
+            f1_score(
+                true_labels,
+                predicted_labels,
+                labels=np.arange(len(semantic_freshness_embedding.HORIZONS)),
+                average="macro",
+                zero_division=0,
+            )
+        ),
+        "weighted_kappa": (
+            float(weighted_kappa) if math.isfinite(weighted_kappa) else None
+        ),
+        "log_duration_mae": float(
+            np.mean(np.abs(np.log(predicted_lifetimes) - np.log(true_lifetimes)))
+        ),
+        "long_lived_auc": long_lived_auc,
+    }
 
 
 def compute_and_log_metrics(
@@ -120,7 +178,7 @@ async def save_eval_results(
     model_name: str,
     training_counts: dict[str, int],
     eval_counts: dict[str, int],
-    metrics: dict[str, float],
+    metrics: Mapping[str, float | None],
 ) -> None:
     """Persist an evaluation record to JSON history and PostgreSQL.
 
@@ -130,7 +188,7 @@ async def save_eval_results(
     eval job, because Miniflux's ``model_evals`` table is the durable history.
 
     Args:
-        model_name: Name of the model evaluated (e.g. "Relevance", "Urgency").
+        model_name: Name of the model evaluated.
         training_counts: Article counts used for training, keyed by class.
         eval_counts: Article counts used for evaluation, keyed by class.
         metrics: Metric name to value mapping from ``compute_and_log_metrics``.
@@ -415,8 +473,67 @@ async def eval_urgency(device: torch.device) -> None:
     logger.info(f"[Urgency] Evaluation completed in {elapsed_time:.2f} seconds.")
 
 
+async def eval_freshness(device: torch.device) -> None:
+    """Evaluate freshness on the newest chronological label holdout."""
+    validation_size = config.VALIDATION_SIZE
+    logger.info(
+        f"[Freshness] Starting evaluation with VALIDATION_SIZE={validation_size}"
+    )
+    labeled_data = await dr.get_semantic_freshness_training_data()
+    if len(labeled_data) <= validation_size:
+        logger.warning(
+            f"[Freshness] Not enough labeled articles ({len(labeled_data)}) to hold "
+            f"out {validation_size}. Skipping eval."
+        )
+        return
+
+    training_data = labeled_data[:-validation_size]
+    eval_data = labeled_data[-validation_size:]
+    train_articles = [article for article, _, _ in training_data]
+    eval_articles = [article for article, _, _ in eval_data]
+    train_labels = np.asarray([label for _, label, _ in training_data], dtype=int)
+    eval_labels = np.asarray([label for _, label, _ in eval_data], dtype=int)
+
+    tokenizer, encoder = relevance_embedding.load_encoder(
+        device, pipeline_label="freshness"
+    )
+    embeddings = await relevance_embedding.encode_articles(
+        train_articles + eval_articles,
+        tokenizer,
+        encoder,
+        device,
+        pipeline_label="freshness",
+    )
+    try:
+        classifiers = semantic_freshness_embedding.fit_classifiers(
+            embeddings[: len(training_data)], train_labels
+        )
+    except RuntimeError as exc:
+        logger.warning(f"[Freshness] {exc} Skipping eval.")
+        return
+    probabilities = semantic_freshness_embedding.bucket_probabilities(
+        embeddings[len(training_data) :], classifiers
+    )
+    metrics = compute_freshness_metrics(eval_labels, probabilities)
+    logger.info(f"[Freshness] Evaluation results: {metrics}")
+
+    horizons = semantic_freshness_embedding.HORIZONS
+    await save_eval_results(
+        model_name="Freshness",
+        training_counts={
+            horizon: int((train_labels == index).sum())
+            for index, horizon in enumerate(horizons)
+        },
+        eval_counts={
+            horizon: int((eval_labels == index).sum())
+            for index, horizon in enumerate(horizons)
+        },
+        metrics=metrics,
+    )
+
+
 async def main() -> None:
-    """Run evaluation for both models sequentially."""
+    """Run evaluation for all models sequentially."""
     validation_size = config.VALIDATION_SIZE
 
     if validation_size == 0:
@@ -442,6 +559,7 @@ async def main() -> None:
     try:
         await eval_relevance(device)
         await eval_urgency(device)
+        await eval_freshness(device)
     finally:
         await dr.global_pool.close()
 

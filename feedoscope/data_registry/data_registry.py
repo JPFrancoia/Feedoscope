@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 import datetime
 from functools import lru_cache
 from importlib.resources import files
@@ -286,7 +287,7 @@ async def insert_model_eval(
     model_name: str,
     training_counts: dict[str, int],
     eval_counts: dict[str, int],
-    metrics: dict[str, float],
+    metrics: Mapping[str, float | None],
 ) -> None:
     """Insert a model evaluation result.
 
@@ -308,13 +309,18 @@ async def insert_model_eval(
                 "model_name": model_name,
                 "training": Jsonb(training_counts),
                 "eval_counts": Jsonb(eval_counts),
-                "metrics_accuracy": metrics["accuracy"],
-                "metrics_precision": metrics["precision"],
-                "metrics_recall": metrics["recall"],
-                "metrics_f1": metrics["f1"],
-                "metrics_roc_auc": metrics["roc_auc"],
-                "metrics_average_precision": metrics["average_precision"],
-                "metrics_log_loss": metrics["log_loss"],
+                "metrics_accuracy": metrics.get("accuracy"),
+                "metrics_precision": metrics.get("precision"),
+                "metrics_recall": metrics.get("recall"),
+                "metrics_f1": metrics.get("f1", metrics.get("macro_f1")),
+                "metrics_roc_auc": metrics.get(
+                    "roc_auc", metrics.get("long_lived_auc")
+                ),
+                "metrics_average_precision": metrics.get("average_precision"),
+                "metrics_log_loss": metrics.get("log_loss"),
+                "metrics_rps": metrics.get("rps"),
+                "metrics_weighted_kappa": metrics.get("weighted_kappa"),
+                "metrics_log_duration_mae": metrics.get("log_duration_mae"),
             },
         )
 

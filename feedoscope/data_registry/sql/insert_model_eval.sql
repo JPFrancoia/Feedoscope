@@ -9,7 +9,10 @@ insert into model_evals (
     metrics_f1,
     metrics_roc_auc,
     metrics_average_precision,
-    metrics_log_loss
+    metrics_log_loss,
+    metrics_rps,
+    metrics_weighted_kappa,
+    metrics_log_duration_mae
 )
 values (
     %(eval_date)s,
@@ -22,5 +25,8 @@ values (
     %(metrics_f1)s,
     %(metrics_roc_auc)s,
     %(metrics_average_precision)s,
-    %(metrics_log_loss)s
+    %(metrics_log_loss)s,
+    %(metrics_rps)s,
+    %(metrics_weighted_kappa)s,
+    %(metrics_log_duration_mae)s
 );

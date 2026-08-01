@@ -41,6 +41,14 @@ configuration. If the active artifact has the same fingerprint, it skips
 retraining. The existing Sunday weekly CronJob invokes this command; unchanged
 labels therefore do not create a new artifact.
 
+## Weekly evaluation
+
+`make eval` also evaluates Freshness. It uses the older chronological labels for
+training and holds out exactly the newest `VALIDATION_SIZE` labels. The results
+are stored in the shared evaluation history; see
+[Model Evaluation History](model-eval-history.md) for the metrics, Miniflux
+schema, and AI Metrics page behavior.
+
 ## Inference and relevance decay
 
 `make infer_freshness` is a prediction smoke run. It does not persist freshness
@@ -56,8 +64,9 @@ persist predictions or write automatic tags.
 
 Migration `000006_three_label_freshness` creates the
 `freshness_bootstrap_labels` table and the three user-1 tags: `fresh_d`,
-`fresh_m`, and `fresh_y`. It does not create inference storage or modify the
-model-evaluation schema.
+`fresh_m`, and `fresh_y`. It does not create inference storage. Miniflux owns
+the shared `model_evals` schema and must be migrated before Feedoscope writes
+Freshness evaluation rows.
 
 Production is at migration version 6 with `dirty=false`, has 1,200 bootstrap
 rows, and has only the three manual freshness tags. The previous
