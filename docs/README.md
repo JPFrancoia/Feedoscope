@@ -14,3 +14,6 @@ systems.
   display behavior.
 - `semantic-freshness.md`: three manual useful-lifetime labels, two-head
   training, chronological evaluation, and in-memory final-score decay.
+- `super-important-ranker.md`: two-head relevance ranking, model-keyed
+  explicit-preference probability storage, artifact compatibility, and the
+  offline rollout gate.

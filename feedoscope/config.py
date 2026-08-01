@@ -33,10 +33,6 @@ ALLOW_TRAINING_WO_GPU = strtobool(os.getenv("ALLOW_TRAINING_WO_GPU", "False"))
 # false because production inference is expected to use a GPU.
 ALLOW_INFERENCE_WO_GPU = strtobool(os.getenv("ALLOW_INFERENCE_WO_GPU", "False"))
 
-# Extra sample weight applied to starred or upvoted articles during relevance
-# training so explicitly preferred articles influence the classifier more.
-EXCELLENT_WEIGHT = float(os.getenv("EXCELLENT_WEIGHT", "3.0"))
-
 # Select the input used for final relevance-score decay. Semantic freshness is
 # the default; urgency remains available for an immediate configuration rollback.
 _relevance_decay_backend = os.getenv("RELEVANCE_DECAY_BACKEND", "semantic_freshness")

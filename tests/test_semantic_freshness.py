@@ -39,7 +39,9 @@ def test_only_three_manual_freshness_tags_remain() -> None:
         "on conflict"
         not in (SQL_DIR / "insert_semantic_freshness_bootstrap_labels.sql").read_text()
     )
-    assert not list(MIGRATIONS_DIR.glob("00000[789]_*.sql"))
+    assert "freshness_inference" not in "\n".join(
+        path.read_text() for path in MIGRATIONS_DIR.glob("*.sql")
+    )
 
 
 def test_bootstrap_validation_rejects_unquoted_evidence() -> None:

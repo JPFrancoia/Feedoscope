@@ -1,10 +1,10 @@
 import asyncio
 import logging
 import os
+from pathlib import Path
 import shutil
 import time
 
-import numpy as np
 import torch
 
 from custom_logging import init_logging
@@ -14,14 +14,14 @@ from feedoscope.entities import Article, RelevanceInferenceResults
 
 logger = logging.getLogger(__name__)
 
-MODEL_NAME = (
-    f"{config.RELEVANCE_MODEL_NAME.replace('/', '-')}_"
-    f"{config.RELEVANCE_MAX_LENGTH}_{config.RELEVANCE_TEXT_PREP_MODE}_"
-    f"embedding_linear_c{config.RELEVANCE_LINEAR_C}"
-)
+MODEL_NAME = relevance_embedding.get_model_family_prefix()
 
 
-def find_latest_model(model_name: str, clean_old_models: bool = True) -> str:
+def find_latest_model(
+    model_name: str,
+    clean_old_models: bool = True,
+    required_filename: str | None = None,
+) -> str:
     """Find the latest saved model to use for inference.
 
     This function will find the latest model in the `models` directory, assuming
@@ -31,7 +31,8 @@ def find_latest_model(model_name: str, clean_old_models: bool = True) -> str:
     Args:
         model_name: family of model to use.
         clean_old_models: if True, delete all older models starting with model_name
-            except the latest one
+            except the latest one.
+        required_filename: if set, only select directories containing this file.
 
     Returns:
         The path to the latest model directory.
@@ -43,16 +44,29 @@ def find_latest_model(model_name: str, clean_old_models: bool = True) -> str:
     models_dir = "models"
     if not os.path.exists(models_dir):
         raise FileNotFoundError(f"Directory {models_dir} does not exist.")
-    model_dirs = [d for d in os.listdir(models_dir) if d.startswith(model_name)]
+    matching_dirs = [
+        entry
+        for entry in os.listdir(models_dir)
+        if entry.startswith(model_name)
+        and os.path.isdir(os.path.join(models_dir, entry))
+    ]
+    model_dirs = [
+        model_dir
+        for model_dir in matching_dirs
+        if required_filename is None
+        or os.path.isfile(os.path.join(models_dir, model_dir, required_filename))
+    ]
     if not model_dirs:
         raise FileNotFoundError(
-            f"No models found starting with {model_name} in {models_dir}."
+            f"No complete models found starting with {model_name} in {models_dir}."
         )
     model_dirs.sort()
     latest_model = model_dirs[-1]
 
     if clean_old_models:
-        for older_model in model_dirs[:-1]:
+        for older_model in matching_dirs:
+            if older_model == latest_model:
+                continue
             older_model_path = os.path.join(models_dir, older_model)
             try:
                 shutil.rmtree(older_model_path)
@@ -96,24 +110,50 @@ async def infer(recent_unread_articles: list[Article]) -> RelevanceInferenceResu
         logger.critical(mes)
         raise RuntimeError(mes)
 
-    model_path = find_latest_model(MODEL_NAME)
-    logger.info(f"Loading embedding-linear relevance artifact from {model_path}")
+    model_path = find_latest_model(
+        MODEL_NAME,
+        clean_old_models=False,
+        required_filename=relevance_embedding.TWO_HEAD_ARTIFACT_FILENAME,
+    )
+    logger.info(f"Loading two-head relevance artifact from {model_path}")
 
-    classifier = relevance_embedding.load_classifier(model_path)
+    relevance_classifier, super_important_classifier = (
+        relevance_embedding.load_two_head_artifact(model_path)
+    )
+    # Load before cleanup so an interrupted training run cannot delete the last
+    # working artifact just because it created a newer directory.
+    find_latest_model(
+        MODEL_NAME,
+        clean_old_models=True,
+        required_filename=relevance_embedding.TWO_HEAD_ARTIFACT_FILENAME,
+    )
     tokenizer, encoder = relevance_embedding.load_encoder(device)
-    probs = await relevance_embedding.predict_probabilities(
+    embeddings = await relevance_embedding.encode_articles(
         recent_unread_articles,
         tokenizer,
         encoder,
-        classifier,
         device,
     )
-    scores = np.round(probs * 100).astype(int).tolist()
+    relevance_probs = relevance_embedding.predict_probabilities_from_embeddings(
+        embeddings, relevance_classifier
+    )
+    super_important_probs = relevance_embedding.predict_probabilities_from_embeddings(
+        embeddings, super_important_classifier
+    )
+    scores = (
+        relevance_embedding.combine_probabilities(
+            relevance_probs,
+            super_important_probs,
+        )
+        * 100
+    )
 
     return RelevanceInferenceResults(
         article_ids=[article.article_id for article in recent_unread_articles],
         article_titles=[article.title for article in recent_unread_articles],
-        scores=scores,
+        scores=scores.tolist(),
+        super_important_scores=super_important_probs.tolist(),
+        model_key=Path(model_path).name,
     )
 
 
@@ -131,10 +171,11 @@ async def main() -> None:
         f"Inference completed in {elapsed_time:.2f} seconds for {len(recent_unread_articles)} articles."
     )
 
+    await dr.register_super_important_inference(results)
     await dr.update_scores(
         article_ids=results.article_ids,
         article_titles=results.article_titles,
-        scores=results.scores,
+        scores=[round(score) for score in results.scores],
     )
     logger.debug(
         f"Scores updated in the database for {len(results.article_ids)} articles."

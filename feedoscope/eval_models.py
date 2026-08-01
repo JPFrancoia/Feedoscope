@@ -27,6 +27,7 @@ from sklearn.metrics import (
     cohen_kappa_score,
     f1_score,
     log_loss,
+    ndcg_score,
     precision_score,
     recall_score,
     roc_auc_score,
@@ -58,6 +59,11 @@ EVAL_URGENCY_PREFIX = "eval_urgency"
 MAX_LENGTH = 512
 INFERENCE_BATCH_SIZE = 128
 EVAL_HISTORY_PATH = "models/eval_history.json"
+SUPER_IMPORTANT_SETTLING_DAYS = 40
+SUPER_IMPORTANT_HOLDOUT_FRACTION = 0.2
+MIN_SUPER_IMPORTANT_EXAMPLES = 10
+SUPER_IMPORTANT_RANKING_BUDGETS = (10, 25, 50)
+WEIGHTED_RELEVANCE_BASELINE_WEIGHT = 20.0
 
 
 def _clean_stale_eval_dirs() -> None:
@@ -128,6 +134,83 @@ def compute_freshness_metrics(
         ),
         "long_lived_auc": long_lived_auc,
     }
+
+
+def split_super_important_eval_articles(
+    articles: list[Article],
+    now: datetime.datetime | None = None,
+) -> tuple[list[Article], list[Article]]:
+    """Split mature labels into an older training set and newer holdout."""
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    cutoff = now - datetime.timedelta(days=SUPER_IMPORTANT_SETTLING_DAYS)
+    mature_articles = sorted(
+        (
+            article
+            for article in articles
+            if article.last_read is not None and article.last_read <= cutoff
+        ),
+        key=lambda article: (article.last_read, article.article_id),
+    )
+    split_index = int(len(mature_articles) * (1 - SUPER_IMPORTANT_HOLDOUT_FRACTION))
+    return mature_articles[:split_index], mature_articles[split_index:]
+
+
+def compute_super_important_ranking_metrics(
+    articles: list[Article],
+    scores: np.ndarray,
+    budgets: tuple[int, ...] = SUPER_IMPORTANT_RANKING_BUDGETS,
+) -> dict[str, float]:
+    """Measure explicit-preference ranking and ordinary relevance guardrails."""
+    scores = np.asarray(scores, dtype=float)
+    if scores.ndim != 1 or len(scores) != len(articles):
+        raise ValueError(
+            "Ranking scores must be one-dimensional and align with articles."
+        )
+    if not len(scores) or not np.isfinite(scores).all():
+        raise ValueError("Ranking scores must be non-empty and finite.")
+    if not budgets or any(budget <= 0 for budget in budgets):
+        raise ValueError("Ranking budgets must be positive.")
+
+    good_labels = np.asarray(
+        [article.status == "read" and article.vote >= 0 for article in articles],
+        dtype=int,
+    )
+    super_important_labels = np.asarray(
+        [relevance_embedding.is_super_important(article) for article in articles],
+        dtype=int,
+    )
+    read_mask = good_labels.astype(bool)
+    read_labels = super_important_labels[read_mask]
+    if np.unique(good_labels).size != 2 or np.unique(read_labels).size != 2:
+        raise ValueError(
+            "Ranking metrics need good, bad, super-important, and ordinary-read rows."
+        )
+
+    ranked_indices = np.argsort(-scores, kind="stable")
+    positive_count = int(super_important_labels.sum())
+    graded_labels = good_labels + super_important_labels
+    metrics = {
+        "positive_prevalence": float(read_labels.mean()),
+        "super_important_average_precision": float(
+            average_precision_score(read_labels, scores[read_mask])
+        ),
+        "relevance_average_precision": float(
+            average_precision_score(good_labels, scores)
+        ),
+    }
+    for budget in budgets:
+        effective_budget = min(budget, len(articles))
+        top_labels = super_important_labels[ranked_indices[:effective_budget]]
+        metrics[f"precision_at_{budget}"] = float(top_labels.mean())
+        metrics[f"recall_at_{budget}"] = float(top_labels.sum() / positive_count)
+        metrics[f"ndcg_at_{budget}"] = float(
+            ndcg_score(
+                graded_labels[np.newaxis, :],
+                scores[np.newaxis, :],
+                k=effective_budget,
+            )
+        )
+    return metrics
 
 
 def compute_and_log_metrics(
@@ -237,7 +320,7 @@ async def _run_relevance_inference(
     articles: list[Article],
     device: torch.device,
 ) -> np.ndarray:
-    """Run held-out relevance inference with the embedding-linear backend."""
+    """Run held-out relevance inference with the relevance head only."""
     return await relevance_embedding.predict_probabilities(
         articles,
         tokenizer,
@@ -321,7 +404,12 @@ async def eval_relevance(device: torch.device) -> None:
     model_path = f"models/{EVAL_RELEVANCE_PREFIX}"
 
     try:
-        encoder, tokenizer, classifier = await llm_learn.train_model(
+        (
+            encoder,
+            tokenizer,
+            relevance_classifier,
+            super_important_classifier,
+        ) = await llm_learn.train_model(
             good_articles,
             bad_articles,
             model_path,
@@ -333,14 +421,14 @@ async def eval_relevance(device: torch.device) -> None:
         good_probs = await _run_relevance_inference(
             encoder,
             tokenizer,
-            classifier,
+            relevance_classifier,
             eval_good,
             device,
         )
         bad_probs = await _run_relevance_inference(
             encoder,
             tokenizer,
-            classifier,
+            relevance_classifier,
             eval_bad,
             device,
         )
@@ -366,6 +454,147 @@ async def eval_relevance(device: torch.device) -> None:
 
     elapsed_time = time.time() - start_time
     logger.info(f"[Relevance] Evaluation completed in {elapsed_time:.2f} seconds.")
+
+
+async def eval_super_important(device: torch.device) -> None:
+    """Compare rankers on a mature, chronological, natural-prevalence holdout."""
+    all_articles = await dr.get_read_articles_training(validation_size=0)
+    all_articles += await dr.get_published_articles(validation_size=0)
+    train_articles, eval_articles = split_super_important_eval_articles(all_articles)
+
+    train_super_important = sum(
+        relevance_embedding.is_super_important(article) for article in train_articles
+    )
+    eval_super_important_count = sum(
+        relevance_embedding.is_super_important(article) for article in eval_articles
+    )
+    train_good = sum(
+        article.status == "read" and article.vote >= 0 for article in train_articles
+    )
+    eval_good = sum(
+        article.status == "read" and article.vote >= 0 for article in eval_articles
+    )
+    train_counts = {
+        "good": train_good,
+        "bad": len(train_articles) - train_good,
+        "super_important": train_super_important,
+        "ordinary_read": train_good - train_super_important,
+    }
+    eval_counts = {
+        "good": eval_good,
+        "bad": len(eval_articles) - eval_good,
+        "super_important": eval_super_important_count,
+        "ordinary_read": eval_good - eval_super_important_count,
+    }
+    required_counts = (
+        train_counts["bad"],
+        eval_counts["bad"],
+        train_counts["super_important"],
+        train_counts["ordinary_read"],
+        eval_counts["super_important"],
+        eval_counts["ordinary_read"],
+    )
+    if min(required_counts) < MIN_SUPER_IMPORTANT_EXAMPLES or len(eval_articles) < max(
+        SUPER_IMPORTANT_RANKING_BUDGETS
+    ):
+        logger.warning(
+            "[Super-important] Not enough mature examples for a stable benchmark: "
+            f"training={train_counts}, eval={eval_counts}. Skipping eval."
+        )
+        return
+
+    logger.info(
+        f"[Super-important] Chronological training counts: {train_counts}; "
+        f"holdout counts: {eval_counts}."
+    )
+    logger.info(
+        "[Super-important] Fixed holdout article IDs: "
+        f"{[article.article_id for article in eval_articles]}"
+    )
+
+    tokenizer, encoder = relevance_embedding.load_encoder(
+        device,
+        pipeline_label="super-important evaluation",
+    )
+    embeddings = await relevance_embedding.encode_articles(
+        train_articles + eval_articles,
+        tokenizer,
+        encoder,
+        device,
+        pipeline_label="super-important evaluation",
+    )
+    train_embeddings = embeddings[: len(train_articles)]
+    eval_embeddings = embeddings[len(train_articles) :]
+    relevance_labels = np.asarray(
+        [article.status == "read" and article.vote >= 0 for article in train_articles],
+        dtype=int,
+    )
+    super_important_labels = np.asarray(
+        [relevance_embedding.is_super_important(article) for article in train_articles],
+        dtype=int,
+    )
+    weighted_classifier = relevance_embedding.fit_classifier(
+        train_embeddings,
+        relevance_labels,
+        pipeline_label="weighted relevance baseline",
+        sample_weights=np.where(
+            super_important_labels == 1,
+            WEIGHTED_RELEVANCE_BASELINE_WEIGHT,
+            1.0,
+        ),
+    )
+    relevance_classifier = relevance_embedding.fit_classifier(
+        train_embeddings,
+        relevance_labels,
+        pipeline_label="unweighted relevance",
+    )
+    read_mask = relevance_labels.astype(bool)
+    super_important_classifier = relevance_embedding.fit_classifier(
+        train_embeddings[read_mask],
+        super_important_labels[read_mask],
+        pipeline_label="super-important",
+    )
+
+    weighted_scores = relevance_embedding.predict_probabilities_from_embeddings(
+        eval_embeddings,
+        weighted_classifier,
+    )
+    relevance_scores = relevance_embedding.predict_probabilities_from_embeddings(
+        eval_embeddings,
+        relevance_classifier,
+    )
+    combined_scores = relevance_embedding.combine_probabilities(
+        relevance_scores,
+        relevance_embedding.predict_probabilities_from_embeddings(
+            eval_embeddings,
+            super_important_classifier,
+        ),
+    )
+    for model_name, scores in (
+        ("weighted_relevance_baseline", weighted_scores),
+        ("unweighted_relevance", relevance_scores),
+        ("two_head_ranker", combined_scores),
+    ):
+        metrics = compute_super_important_ranking_metrics(eval_articles, scores)
+        logger.info(f"[Super-important][{model_name}] {metrics}")
+
+    positive_articles = [
+        article
+        for article in eval_articles
+        if relevance_embedding.is_super_important(article)
+    ]
+    subgroup_counts = {
+        "upvoted_only": sum(
+            article.vote == 1 and not article.starred for article in positive_articles
+        ),
+        "starred_only": sum(
+            article.vote != 1 and article.starred for article in positive_articles
+        ),
+        "both": sum(
+            article.vote == 1 and article.starred for article in positive_articles
+        ),
+    }
+    logger.info(f"[Super-important] Holdout positive subgroups: {subgroup_counts}")
 
 
 async def eval_urgency(device: torch.device) -> None:
@@ -558,6 +787,7 @@ async def main() -> None:
 
     try:
         await eval_relevance(device)
+        await eval_super_important(device)
         await eval_urgency(device)
         await eval_freshness(device)
     finally:

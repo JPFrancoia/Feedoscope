@@ -59,14 +59,14 @@ def get_decay_half_life(
 
 
 def decay_relevance_score(
-    original_score: int,
+    original_score: float,
     date_entered: datetime,
     half_life_days: float,
 ) -> int:
     """Apply exponential time decay using a concrete half-life in days.
 
     Args:
-        original_score: The raw relevance score (0-100).
+        original_score: The unrounded raw relevance score (0-100).
         date_entered: When the article was published.
         half_life_days: Days until the score is halved.
 
@@ -164,6 +164,7 @@ async def main() -> None:
             f"Relevance inference completed in {relevance_elapsed:.2f} seconds "
             f"for {len(relevance_scores.article_ids)} articles."
         )
+        await dr.register_super_important_inference(relevance_scores)
 
         # Step 5: Fetch the legacy urgency scores only when the rollback backend is active.
         urgency_scores: dict[int, float] = {}
@@ -217,7 +218,7 @@ async def main() -> None:
         await dr.update_scores(
             article_ids=relevance_scores.article_ids,
             article_titles=relevance_scores.article_titles,
-            scores=relevance_scores.scores,
+            scores=[round(score) for score in relevance_scores.scores],
         )
 
         db_write_time = time.time() - inference_time - start_time
