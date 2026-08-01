@@ -224,13 +224,14 @@ def test_rolling_bonus_selection_requires_every_window(
         "relevance_average_precision": 0.99,
         "recall_at_10": 0.1,
     }
+    no_recall = {**passing, "recall_at_10": 0.0}
     failing = {**passing, "relevance_average_precision": 0.98}
     monkeypatch.setattr(eval_models, "SUPER_IMPORTANT_BONUS_GRID", (0.0, 0.25, 0.5))
 
     assert (
         eval_models.select_bonus_passing_all_windows(
             [
-                (baseline, {0.0: failing, 0.25: passing, 0.5: passing}),
+                (baseline, {0.0: failing, 0.25: no_recall, 0.5: passing}),
                 (baseline, {0.0: failing, 0.25: passing, 0.5: failing}),
             ]
         )
@@ -244,7 +245,7 @@ def test_rolling_bonus_selection_requires_every_window(
     )
     assert (
         eval_models.select_bonus_passing_all_windows(
-            [(baseline, {0.0: failing, 0.25: failing, 0.5: failing})]
+            [(baseline, {0.0: no_recall, 0.25: no_recall, 0.5: no_recall})]
         )
         is None
     )

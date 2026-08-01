@@ -254,8 +254,16 @@ def select_bonus_passing_all_windows(
         bonus
         for bonus in SUPER_IMPORTANT_BONUS_GRID
         if all(
-            super_important_rollout_gate_passes(baseline, candidates[bonus])
+            candidates[bonus]["relevance_average_precision"]
+            >= baseline["relevance_average_precision"] - MAX_RELEVANCE_AP_DROP
+            and candidates[bonus]["super_important_average_precision"]
+            > baseline["super_important_average_precision"]
             for baseline, candidates in window_results
+        )
+        and any(
+            candidates[bonus][f"recall_at_{budget}"] > baseline[f"recall_at_{budget}"]
+            for baseline, candidates in window_results
+            for budget in SUPER_IMPORTANT_RANKING_BUDGETS
         )
     ]
     return min(eligible, default=None)

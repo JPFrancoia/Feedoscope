@@ -1,6 +1,6 @@
 # Dedicated super-important ranker plan
 
-**Status:** Rolling-window bonus tuning in progress after the one-time confirmation failed — 2026-08-01
+**Status:** Bonus `0.5` approved for controlled production rollout — 2026-08-01
 
 ## 1. Brief
 
@@ -114,10 +114,12 @@ Use the already observed periods as rolling validation rather than trying a seco
 1. Fit on the oldest 60% and evaluate on the next 20%.
 2. Refit on the oldest 80% and evaluate on the newest 20%.
 3. Evaluate a fixed quarter-step grid from `0.0` through `3.0` in both windows.
-4. A bonus is eligible only if every window keeps relevance AP within `0.01`, improves explicit-preference AP, and improves recall at one of top 10/25/50.
+4. A bonus is eligible only if every window keeps relevance AP within `0.01` and improves explicit-preference AP. Top-10/25/50 recall must improve in at least one window; requiring a hard top-K crossing in every window proved unstable when the first preference head had only 17 positive training examples.
 5. Select the smallest eligible bonus. This deliberately favors the least production influence that consistently works across time.
 
-There is no untouched historical test after this redesign. Before rollout, run a no-write comparison on current unread articles and then a controlled inference. Freeze the selected bonus in the versioned infrastructure manifest and retune only after a substantial increase in explicit-preference labels, expected in a few months.
+The strict every-window top-K rule had no overlap: the older window needed at least `1.75` to move a preferred article into the top 50, while the newer window's relevance guardrail allowed at most `1.25`. The user approved the adjusted top-K rule and bonus `0.5`: preference AP changed `0.0173 → 0.0175` and relevance AP `0.9706 → 0.9721` in the older window; preference AP changed `0.0821 → 0.2660`, relevance AP `0.9615 → 0.9603`, and top-50 preferred articles `0 → 20` in the newer window.
+
+There is no untouched historical test after this redesign. Before rollout, run a no-write comparison on current unread articles and then a controlled inference. Freeze `0.5` in the versioned infrastructure manifest and retune only after a substantial increase in explicit-preference labels, expected in a few months.
 
 The code change itself makes the two-head model the only artifact family inference accepts, so deployment must train it before scheduling inference.
 
@@ -169,8 +171,8 @@ No Miniflux UI change, additional model, dependency, or CronJob is needed. One F
 - [x] Run format, tests, Ruff, and mypy. Final local result: 39 tests passed; Ruff and mypy passed.
 - [x] Run the first live benchmark. Direct multiplication improved explicit-preference ranking but failed the 0.01 relevance-AP guardrail, so it was not deployed.
 - [x] Implement deterministic bounded-bonus tuning and run chronological validation/test benchmarks. Bonus `3.0` passed validation but failed the one-time confirmation guardrail; production remained unchanged.
-- [ ] Replace the single confirmation with the predeclared two-window expanding evaluation and select the smallest bonus passing every window.
-- [ ] If a bonus clears both rolling windows, run a no-write current-article comparison, update the infrastructure manifest, train once, and perform controlled inference.
+- [x] Replace the single confirmation with the two-window expanding evaluation. The strict per-window top-K rule had no passing bonus; after explicit approval to require top-K improvement in either window while retaining both AP gates in every window, select bonus `0.5`.
+- [ ] Run a no-write current-article comparison, update the infrastructure manifest, train once, and perform controlled inference.
 - [x] Update durable documentation for the implemented behavior in `docs/super-important-ranker.md` and `docs/README.md`.
 - [ ] After the benchmark and rollout decision, mark this plan completed.
 
@@ -180,5 +182,5 @@ No Miniflux UI change, additional model, dependency, or CronJob is needed. One F
 - Confirmed: the current `entries.score` ordering is the intended consumer. The two-head result replaces the raw relevance ranking in memory; the separate importance probability is stored for inspection and possible future UI use, but is not displayed in this version.
 - Assumption: top-10, top-25, and top-50 are useful initial review budgets; they are benchmark reporting points, not hard product limits.
 - Confirmed: a general relevance AP drop larger than 0.01 versus the weighted baseline blocks rollout.
-- The implementation should not proceed to production deployment if every rolling window does not show a measured improvement within that guardrail.
+- The implementation should not proceed to production deployment unless every rolling window improves preference AP within the relevance guardrail and at least one window improves top-K recall.
 - Confirmed: freeze the deployed bonus and retune in a few months after substantially more super-important labels have accumulated.
