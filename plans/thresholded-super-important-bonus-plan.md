@@ -1,6 +1,6 @@
 # Thresholded super-important bonus rollout plan
 
-**Status:** Approved for immediate implementation and rollout — 2026-08-01
+**Status:** Age-block rollout in progress — 2026-08-01
 
 ## 1. Brief
 
@@ -70,9 +70,15 @@ No model retraining, schema migration, new dependency, or new configuration is r
 - [x] Update, commit, and apply production image `ff3c181` in infrastructure commit `5b37f73`.
 - [x] Trigger controlled inference and verify live completion for 8,737 articles, then a 60-day refresh for 11,384 articles. Verification exposed separate stale old scores beyond the full-refresh window.
 - [x] Batch final article-score writes in 1,000-row committed transactions and merge the pending local AI-metrics/startup-log changes with the threshold change. Validation: 44 tests, Ruff, mypy, Black/isort, and diff check passed.
-- [ ] Commit the combined local changes, rebuild/push the image, and update production.
-- [ ] Retry the user-selected 365-day refresh after restoring PostgreSQL on an expanded 5 GiB volume; verify batch progress, completion, and storage headroom.
-- [ ] Update documentation and mark this plan completed with rollout evidence.
+- [x] Commit the combined local changes, build/push image `3a5dc33`, and update production.
+- [x] Keep the already-running 365-day `3a5dc33` job alive while improving the next image. It completed all 55,003 articles in 44 minutes and committed 56 score batches without filling PostgreSQL.
+- [x] Add 30-second/1,000-article progress logging and non-overlapping `--min-age-days`/`--max-age-days` controlled inference, validated with 46 tests, Ruff, mypy, Black/isort, and CLI checks.
+- [x] Delete 13 superseded Feedoscope manifests from the remote registry and run offline garbage collection, reducing registry storage from 21.2 GiB to 4.6 GiB while preserving the running image.
+- [x] Build/push image `6475d27` and deploy it to every Feedoscope CronJob.
+- [x] Verify image `6475d27` through the next scheduled 8,715-article inference: text preparation logged every 10–30 seconds, score writes committed in nine batches, and PostgreSQL remained at 40% usage.
+- [x] Clear 904 stale positive scores from unread downvoted articles immediately; add startup cleanup so future downvotes cannot retain old rank scores after inference runs.
+- [ ] Run one controlled age block on the final image to verify the new age-range path; the completed 365-day refresh makes rerunning every block unnecessary now.
+- [ ] Mark this plan completed with final rollout evidence.
 
 ## 8. Open questions / assumptions
 

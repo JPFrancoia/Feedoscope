@@ -214,6 +214,18 @@ async def get_read_articles_with_urgency_tags() -> list[tuple[Article, int]]:
     return results
 
 
+async def clear_downvoted_unread_scores() -> int:
+    """Clear stale scores from unread articles excluded after a downvote."""
+    query = _get_query_from_file("clear_downvoted_unread_scores.sql")
+
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(query)
+        cleared = cur.rowcount
+
+    logger.info(f"Cleared scores from {cleared} downvoted unread articles.")
+    return cleared
+
+
 async def get_previous_days_unread_articles(number_of_days: int = 14) -> list[Article]:
     """Get unread articles from the previous X days.
 

@@ -573,3 +573,35 @@ def test_score_updates_commit_bounded_batches(
                 scores=[10, 20],
             )
         )
+
+
+def test_downvoted_unread_scores_are_cleared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executed: list[str] = []
+
+    class Cursor(AbstractAsyncContextManager["Cursor"]):
+        rowcount = 7
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def execute(self, query: str) -> None:
+            executed.append(query)
+
+    class Connection(AbstractAsyncContextManager["Connection"]):
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+    class Pool:
+        def connection(self) -> Connection:
+            return Connection()
+
+    monkeypatch.setattr(dr, "global_pool", Pool())
+    monkeypatch.setattr(dr, "_get_query_from_file", lambda filename: filename)
+
+    assert asyncio.run(dr.clear_downvoted_unread_scores()) == 7
+    assert executed == ["clear_downvoted_unread_scores.sql"]

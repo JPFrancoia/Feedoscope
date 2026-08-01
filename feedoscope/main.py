@@ -138,6 +138,7 @@ async def main(
     await dr.global_pool.open(wait=True)
     logger.info("Database pool opened.")
     try:
+        await dr.clear_downvoted_unread_scores()
         urgency_model_key = llm_infer_urgency.get_active_model_key()
         logger.info(f"Active urgency model key: {urgency_model_key}")
 

@@ -50,6 +50,25 @@ then rounds and writes final integer `entries.score` values in transactions of
 1,000 articles. Each transaction commits before the next batch starts, limiting
 the WAL and rollback cost of large refreshes.
 
+### Controlled age-block inference
+
+Every inference run first resets stale scores on unread downvoted articles to
+zero; those articles are excluded from model scoring afterward. Scheduled
+inference then keeps its existing 40-day full refresh plus 1,500 sampled older
+articles. Large controlled refreshes can instead select one complete,
+non-overlapping age block:
+
+```bash
+python -m feedoscope.main --min-age-days 0 --max-age-days 30
+python -m feedoscope.main --min-age-days 30 --max-age-days 90
+python -m feedoscope.main --min-age-days 90 --max-age-days 120
+```
+
+The minimum age is included and the maximum age is excluded, so adjacent blocks
+do not overlap. Both bounds are required together. During text preparation,
+Feedoscope reports progress at least every 30 seconds and after each 1,000
+articles so large runs do not appear stalled.
+
 ## Artifact compatibility
 
 Two-head artifacts use a versioned `relevance_two_head_` model family. Its name

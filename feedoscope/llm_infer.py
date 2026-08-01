@@ -162,6 +162,7 @@ async def main() -> None:
     """Run relevance inference and write scores back to the database."""
     await dr.global_pool.open(wait=True)
 
+    await dr.clear_downvoted_unread_scores()
     recent_unread_articles = await dr.get_previous_days_unread_articles()
     logger.debug(f"Collected {len(recent_unread_articles)} recent unread articles.")
 
