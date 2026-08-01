@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 from datetime import datetime, timezone
 import logging
@@ -24,6 +25,33 @@ LOOKBACK_DAYS = 40
 # time to time, but we save some computing time.
 MAX_LOOKBACK_DAYS_SAMPLING = 365
 SAMPLING = 1500
+
+
+def validate_age_range(
+    min_age_days: int | None,
+    max_age_days: int | None,
+) -> tuple[int, int] | None:
+    """Validate an optional non-overlapping inference age range."""
+    if min_age_days is None and max_age_days is None:
+        return None
+    if min_age_days is None or max_age_days is None:
+        raise ValueError("min-age-days and max-age-days must be provided together")
+    if min_age_days < 0 or max_age_days <= min_age_days:
+        raise ValueError("age range must satisfy 0 <= min-age-days < max-age-days")
+    return min_age_days, max_age_days
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse optional age-block arguments for controlled inference."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--min-age-days", type=int)
+    parser.add_argument("--max-age-days", type=int)
+    args = parser.parse_args()
+    try:
+        validate_age_range(args.min_age_days, args.max_age_days)
+    except ValueError as exc:
+        parser.error(str(exc))
+    return args
 
 
 def compute_urgency_half_life(urgency_prob: float) -> float:
@@ -90,12 +118,22 @@ def decay_relevance_score(
     return int(round(decayed_score))
 
 
-async def main() -> None:
+async def main(
+    min_age_days: int | None = None,
+    max_age_days: int | None = None,
+) -> None:
+    age_range = validate_age_range(min_age_days, max_age_days)
     init_logging(config.LOGGING_CONFIG)
-    logger.info(
-        f"Starting inference: lookback={LOOKBACK_DAYS}d, sampling={SAMPLING}, "
-        f"decay={config.RELEVANCE_DECAY_BACKEND}"
-    )
+    if age_range is None:
+        logger.info(
+            f"Starting inference: lookback={LOOKBACK_DAYS}d, sampling={SAMPLING}, "
+            f"decay={config.RELEVANCE_DECAY_BACKEND}"
+        )
+    else:
+        logger.info(
+            f"Starting inference for article ages [{age_range[0]}, {age_range[1]}) "
+            f"days with decay={config.RELEVANCE_DECAY_BACKEND}"
+        )
     logger.info("Opening database pool...")
     await dr.global_pool.open(wait=True)
     logger.info("Database pool opened.")
@@ -105,11 +143,18 @@ async def main() -> None:
 
         # Step 1: Build the active article set once. Urgency refresh must mirror
         # relevance refresh exactly, so both backends operate on this same list.
-        articles = await llm_infer_urgency.get_articles_for_refresh(
-            number_of_days=LOOKBACK_DAYS,
-            max_age_in_days=MAX_LOOKBACK_DAYS_SAMPLING,
-            sampling=SAMPLING,
-        )
+        if age_range is None:
+            articles = await llm_infer_urgency.get_articles_for_refresh(
+                number_of_days=LOOKBACK_DAYS,
+                max_age_in_days=MAX_LOOKBACK_DAYS_SAMPLING,
+                sampling=SAMPLING,
+            )
+        else:
+            articles = await dr.get_unread_articles_by_age(*age_range)
+            logger.info(
+                f"Fetched {len(articles)} unread articles aged "
+                f"[{age_range[0]}, {age_range[1]}) days."
+            )
         logger.info(f"Total articles to be scored: {len(articles)}")
 
         if not articles:
@@ -238,4 +283,10 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    cli_args = parse_args()
+    asyncio.run(
+        main(
+            min_age_days=cli_args.min_age_days,
+            max_age_days=cli_args.max_age_days,
+        )
+    )

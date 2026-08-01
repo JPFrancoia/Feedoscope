@@ -8,6 +8,17 @@ os.environ.setdefault("DATABASE_URL", "postgresql://test")
 from feedoscope import main
 
 
+def test_inference_age_range_validation() -> None:
+    assert main.validate_age_range(None, None) is None
+    assert main.validate_age_range(0, 30) == (0, 30)
+    assert main.validate_age_range(30, 90) == (30, 90)
+
+    with pytest.raises(ValueError, match="provided together"):
+        main.validate_age_range(30, None)
+    with pytest.raises(ValueError, match="must satisfy"):
+        main.validate_age_range(90, 30)
+
+
 def test_semantic_lifetime_is_score_half_life() -> None:
     score = main.decay_relevance_score(
         original_score=100,

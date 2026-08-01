@@ -262,6 +262,33 @@ async def get_old_unread_articles(
     return [Article(**article) for article in data]
 
 
+async def get_unread_articles_by_age(
+    min_age_days: int, max_age_days: int
+) -> list[Article]:
+    """Get every unread article in the requested age range.
+
+    Args:
+        min_age_days: Youngest included article age in days.
+        max_age_days: Oldest excluded article age in days.
+
+    Returns:
+        Unread, non-downvoted, unstarred articles in the age range.
+    """
+    query = _get_query_from_file("get_unread_articles_by_age.sql")
+
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(
+            query,
+            {
+                "min_age_days": min_age_days,
+                "max_age_days": max_age_days,
+            },
+        )
+        data = await cur.fetchall()
+
+    return [Article(**article) for article in data]
+
+
 async def update_scores(
     article_ids: list[int], article_titles: list[str], scores: list[int]
 ) -> None:
