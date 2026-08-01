@@ -178,13 +178,19 @@ def prepare_articles_text(
         f"Preparing {pipeline_name} text for {len(articles)} articles using "
         f"{config.RELEVANCE_TEXT_PREP_MODE}"
     )
-    texts = relevance_text.prepare_articles_text(
-        articles,
-        tokenizer=tokenizer,
-        max_length=config.RELEVANCE_MAX_LENGTH,
-        mode=config.RELEVANCE_TEXT_PREP_MODE,
-    )
-    logger.info(f"Prepared {pipeline_name} text for {len(texts)} articles")
+    texts: list[str] = []
+    for start in range(0, len(articles), 1000):
+        texts.extend(
+            relevance_text.prepare_articles_text(
+                articles[start : start + 1000],
+                tokenizer=tokenizer,
+                max_length=config.RELEVANCE_MAX_LENGTH,
+                mode=config.RELEVANCE_TEXT_PREP_MODE,
+            )
+        )
+        logger.info(
+            f"Prepared {pipeline_name} text for {len(texts)}/{len(articles)} articles"
+        )
     return texts
 
 
