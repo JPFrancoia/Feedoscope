@@ -1,6 +1,9 @@
 # Intrinsic Semantic Freshness Implementation Plan
 
-**Status:** Completed — implementation left uncommitted for review (2026-07-26)
+**Status:** Superseded by [`three-label-freshness-redesign-plan.md`](three-label-freshness-redesign-plan.md) — 2026-08-01
+
+> Historical record only. The six-label, automatic-tag, prediction-storage, and
+> freshness model-evaluation design below is no longer deployed.
 
 ## 1. Brief
 

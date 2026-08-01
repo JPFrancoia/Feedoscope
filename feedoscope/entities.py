@@ -78,7 +78,7 @@ class UrgencyInferenceResults(BaseModel):
 
 
 class SemanticFreshnessInferenceResults(BaseModel):
-    """Six-bucket semantic useful-lifetime predictions for articles."""
+    """Three-label freshness predictions and their expected lifetime."""
 
     article_ids: list[int]
     bucket_probabilities: list[list[float]]

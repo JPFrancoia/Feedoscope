@@ -4,15 +4,12 @@ import logging
 import math
 import time
 
-import numpy as np
-
 from custom_logging import init_logging
 from feedoscope import (
     config,
     llm_infer,
     llm_infer_semantic_freshness,
     llm_infer_urgency,
-    semantic_freshness_embedding,
 )
 from feedoscope.data_registry import data_registry as dr
 from feedoscope.utils import clean_title
@@ -134,18 +131,12 @@ async def main() -> None:
             f"model_key={urgency_model_key}."
         )
 
-        # Step 3: Refresh semantic freshness predictions and tags.
-        logger.info("Starting semantic-freshness inference...")
+        # Step 3: Predict freshness for score decay without changing article tags.
+        logger.info("Starting freshness inference...")
         freshness_start = time.time()
         freshness_half_lives: dict[int, float] = {}
         try:
             freshness_results = await llm_infer_semantic_freshness.infer(articles)
-            if len(freshness_results.article_ids) != len(
-                freshness_results.expected_lifetime_days
-            ):
-                raise RuntimeError(
-                    "Freshness article IDs and lifetimes must have matching lengths."
-                )
             freshness_half_lives = dict(
                 zip(
                     freshness_results.article_ids,
@@ -155,43 +146,14 @@ async def main() -> None:
             )
         except Exception:
             logger.exception(
-                "Semantic-freshness inference failed; semantic decay will keep raw scores."
+                "Freshness inference failed; semantic decay will keep raw scores."
             )
         else:
-            try:
-                freshness_model_key = (
-                    llm_infer_semantic_freshness.get_active_model_key()
-                )
-                await dr.register_semantic_freshness_inference(
-                    freshness_results,
-                    model_key=freshness_model_key,
-                )
-                logger.info(
-                    f"Semantic-freshness inference completed in "
-                    f"{time.time() - freshness_start:.2f} seconds for "
-                    f"{len(freshness_results.article_ids)} articles with "
-                    f"model_key={freshness_model_key}."
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to store semantic-freshness inference results."
-                )
-
-            try:
-                tag_ids = await dr.ensure_semantic_freshness_user_tags()
-                freshness_horizons = [
-                    semantic_freshness_embedding.HORIZONS[index]
-                    for index in np.argmax(
-                        freshness_results.bucket_probabilities, axis=1
-                    )
-                ]
-                await dr.assign_semantic_freshness_auto_tags(
-                    freshness_results.article_ids,
-                    freshness_horizons,
-                    tag_ids,
-                )
-            except Exception:
-                logger.exception("Failed to assign semantic-freshness tags.")
+            logger.info(
+                f"Freshness inference completed in "
+                f"{time.time() - freshness_start:.2f} seconds for "
+                f"{len(freshness_results.article_ids)} articles."
+            )
 
         # Step 4: Run relevance inference.
         logger.info("Starting inference for relevance scores...")

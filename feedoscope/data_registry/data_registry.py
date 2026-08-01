@@ -13,7 +13,6 @@ from psycopg_pool import AsyncConnectionPool
 from feedoscope import config
 from feedoscope.entities import (
     Article,
-    SemanticFreshnessInferenceResults,
     SimplifiedTimeSensitivity,
     TimeSensitivity,
     UrgencyInferenceResults,
@@ -309,16 +308,13 @@ async def insert_model_eval(
                 "model_name": model_name,
                 "training": Jsonb(training_counts),
                 "eval_counts": Jsonb(eval_counts),
-                "metrics_accuracy": metrics.get("accuracy"),
-                "metrics_precision": metrics.get("precision"),
-                "metrics_recall": metrics.get("recall"),
-                "metrics_f1": metrics.get("f1", metrics.get("macro_f1")),
-                "metrics_roc_auc": metrics.get("roc_auc", metrics.get("evergreen_auc")),
-                "metrics_average_precision": metrics.get("average_precision"),
-                "metrics_log_loss": metrics.get("log_loss"),
-                "metrics_rps": metrics.get("rps"),
-                "metrics_weighted_kappa": metrics.get("weighted_kappa"),
-                "metrics_log_duration_mae": metrics.get("log_duration_mae"),
+                "metrics_accuracy": metrics["accuracy"],
+                "metrics_precision": metrics["precision"],
+                "metrics_recall": metrics["recall"],
+                "metrics_f1": metrics["f1"],
+                "metrics_roc_auc": metrics["roc_auc"],
+                "metrics_average_precision": metrics["average_precision"],
+                "metrics_log_loss": metrics["log_loss"],
             },
         )
 
@@ -721,44 +717,23 @@ async def assign_urgency_tags_for_articles(
 # --- Semantic freshness ---
 
 
-async def ensure_semantic_freshness_user_tags() -> dict[str, int]:
-    """Ensure the six reviewed and six automatic freshness tags exist."""
-    upsert_query = _get_query_from_file("upsert_semantic_freshness_user_tags.sql")
-    select_query = _get_query_from_file("get_semantic_freshness_user_tags.sql")
-
-    async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.execute(upsert_query)
-        await cur.execute(select_query)
-        data = await cur.fetchall()
-
-    return {row["title"]: row["id"] for row in data}
-
-
-async def promote_read_auto_freshness_tags() -> None:
-    """Accept auto freshness tags on read entries as reviewed training labels."""
-    query = _get_query_from_file("promote_read_auto_freshness_tags.sql")
-    async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.execute(query)
-
-
-async def get_semantic_freshness_training_data() -> list[tuple[Article, int, str, str]]:
-    """Fetch ordered effective freshness labels with reviewed-tag precedence."""
+async def get_semantic_freshness_training_data() -> list[tuple[Article, int, str]]:
+    """Fetch bootstrap labels plus manual labels from read articles."""
     query = _get_query_from_file("get_semantic_freshness_training.sql")
     async with global_pool.connection() as conn, conn.cursor() as cur:
         await cur.execute(query)
         data = await cur.fetchall()
 
-    results: list[tuple[Article, int, str, str]] = []
+    results: list[tuple[Article, int, str]] = []
     for row in data:
         label = int(row.pop("freshness_label"))
         source = str(row.pop("label_source"))
-        confidence = str(row.pop("label_confidence"))
-        results.append((Article(**row), label, source, confidence))
+        results.append((Article(**row), label, source))
     return results
 
 
 async def get_conflicting_semantic_freshness_labels() -> list[tuple[int, str]]:
-    """Return read entries with more than one reviewed freshness label."""
+    """Return read entries with more than one manual freshness label."""
     query = _get_query_from_file("get_conflicting_semantic_freshness_labels.sql")
     async with global_pool.connection() as conn, conn.cursor() as cur:
         await cur.execute(query)
@@ -766,106 +741,25 @@ async def get_conflicting_semantic_freshness_labels() -> list[tuple[int, str]]:
     return [(int(row["article_id"]), str(row["title"])) for row in data]
 
 
-async def upsert_semantic_freshness_teacher_labels(
-    labels: list[tuple[int, int, str, str]],
+async def replace_semantic_freshness_bootstrap_labels(
+    labels: list[tuple[int, str, str]],
 ) -> None:
-    """Store bootstrap teacher labels with their confidence and provenance."""
+    """Atomically replace the fixed three-label bootstrap."""
     if not labels:
         return
 
-    query = _get_query_from_file("upsert_semantic_freshness_teacher_labels.sql")
+    delete_query = _get_query_from_file(
+        "delete_semantic_freshness_bootstrap_labels.sql"
+    )
+    insert_query = _get_query_from_file(
+        "insert_semantic_freshness_bootstrap_labels.sql"
+    )
     async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(delete_query)
         await cur.executemany(
-            query,
+            insert_query,
             [
-                {
-                    "article_id": article_id,
-                    "horizon": horizon,
-                    "confidence": confidence,
-                    "source": source,
-                }
-                for article_id, horizon, confidence, source in labels
-            ],
-        )
-
-
-async def register_semantic_freshness_inference(
-    results: SemanticFreshnessInferenceResults,
-    model_key: str,
-) -> None:
-    """Upsert full semantic-freshness distributions for one model key."""
-    if not results.article_ids:
-        return
-
-    if not (
-        len(results.article_ids)
-        == len(results.bucket_probabilities)
-        == len(results.expected_lifetime_days)
-    ):
-        raise ValueError("Semantic freshness result lists must have matching lengths.")
-
-    query = _get_query_from_file("register_semantic_freshness_inference.sql")
-    async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.executemany(
-            query,
-            [
-                {
-                    "article_id": article_id,
-                    "model_key": model_key,
-                    "bucket_probabilities": probabilities,
-                    "expected_lifetime_days": lifetime,
-                }
-                for article_id, probabilities, lifetime in zip(
-                    results.article_ids,
-                    results.bucket_probabilities,
-                    results.expected_lifetime_days,
-                )
-            ],
-        )
-
-
-async def get_semantic_freshness_for_articles(
-    article_ids: list[int],
-    model_key: str,
-) -> dict[int, tuple[list[float], float]]:
-    """Fetch cached semantic-freshness distributions for selected articles."""
-    if not article_ids:
-        return {}
-
-    query = _get_query_from_file("get_semantic_freshness_for_articles.sql")
-    async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.execute(query, {"article_ids": article_ids, "model_key": model_key})
-        data = await cur.fetchall()
-
-    return {
-        int(row["article_id"]): (
-            [float(value) for value in row["bucket_probabilities"]],
-            float(row["expected_lifetime_days"]),
-        )
-        for row in data
-    }
-
-
-async def assign_semantic_freshness_auto_tags(
-    article_ids: list[int],
-    horizons: list[str],
-    tag_ids: dict[str, int],
-) -> None:
-    """Replace only automatic freshness tags while preserving reviewed tags."""
-    if len(article_ids) != len(horizons):
-        raise ValueError(
-            "Freshness article IDs and horizons must have matching lengths."
-        )
-
-    query = _get_query_from_file("set_semantic_freshness_auto_tag_for_entry.sql")
-    async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.executemany(
-            query,
-            [
-                {
-                    "entry_id": article_id,
-                    "user_tag_id": tag_ids[f"fresh-auto-{horizon}"],
-                }
-                for article_id, horizon in zip(article_ids, horizons)
+                {"article_id": article_id, "label": label, "source": source}
+                for article_id, label, source in labels
             ],
         )

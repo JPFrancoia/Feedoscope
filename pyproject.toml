@@ -51,6 +51,9 @@ microsoft-python-type-stubs = { git = "https://github.com/microsoft/python-type-
 [tool.mypy]
 exclude = "^experiments/"
 
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
 [tool.isort]
 # Make isort compatible with black
 profile = "black"

@@ -1,6 +1,10 @@
 # Semantic Freshness Score Rollout Plan
 
-**Status:** Completed (2026-07-31)
+**Status:** Superseded by [`three-label-freshness-redesign-plan.md`](three-label-freshness-redesign-plan.md) — 2026-08-01
+
+> Historical record only. The former six-label `fresh-*`/`fresh-auto-*`
+> rollout, prediction persistence, and freshness model-evaluation integration
+> are no longer deployed.
 
 ## Brief
 

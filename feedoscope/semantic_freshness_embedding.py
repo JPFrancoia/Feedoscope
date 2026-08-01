@@ -15,23 +15,16 @@ from feedoscope import config, relevance_embedding
 
 logger = logging.getLogger(__name__)
 
-HORIZONS = (
-    "lt-24h",
-    "1-3d",
-    "4-7d",
-    "8-30d",
-    "1-6m",
-    "evergreen",
-)
-THRESHOLDS = ("24h", "3d", "7d", "30d", "6m")
-REPRESENTATIVE_DAYS = np.asarray((0.5, 2.0, 5.5, 19.0, 90.0, 365.0))
+HORIZONS = ("fresh_d", "fresh_m", "fresh_y")
+THRESHOLDS = ("30d", "6m")
+REPRESENTATIVE_DAYS = np.asarray((7.0, 90.0, 365.0))
 ARTIFACT_FILENAME = "semantic_freshness.joblib"
 
 
 def get_model_family_prefix() -> str:
-    """Return the artifact family prefix for semantic-freshness models."""
+    """Return the artifact family prefix for three-label freshness models."""
     return (
-        f"semantic_freshness_{config.RELEVANCE_MODEL_NAME.replace('/', '-')}_"
+        f"freshness_3label_{config.RELEVANCE_MODEL_NAME.replace('/', '-')}_"
         f"{config.RELEVANCE_MAX_LENGTH}_{config.RELEVANCE_TEXT_PREP_MODE}_"
         f"p{config.RELEVANCE_PREP_VERSION}_"
         f"embedding_linear_c{config.SEMANTIC_FRESHNESS_LINEAR_C}_"
@@ -42,7 +35,7 @@ def get_model_family_prefix() -> str:
 def get_model_key(dataset_fingerprint: str | None = None) -> str:
     """Return a configuration key, optionally pinned to one label fingerprint."""
     key = (
-        "semantic-freshness-embedding_linear::"
+        "freshness-3label-embedding_linear::"
         f"{config.RELEVANCE_MODEL_NAME}::{config.RELEVANCE_MAX_LENGTH}::"
         f"{config.RELEVANCE_TEXT_PREP_MODE}::{config.RELEVANCE_PREP_VERSION}::"
         f"c={config.SEMANTIC_FRESHNESS_LINEAR_C}::"
@@ -62,7 +55,7 @@ def build_model_path(dataset_fingerprint: str) -> str:
 
 
 def build_targets(labels: np.ndarray) -> np.ndarray:
-    """Convert six ordered horizon labels into five cumulative targets."""
+    """Convert three ordered freshness labels into two cumulative targets."""
     labels = np.asarray(labels, dtype=int)
     if labels.ndim != 1 or np.any((labels < 0) | (labels >= len(HORIZONS))):
         raise ValueError(
@@ -71,17 +64,15 @@ def build_targets(labels: np.ndarray) -> np.ndarray:
     return labels[:, None] > np.arange(len(THRESHOLDS))
 
 
-def fingerprint_labels(
-    rows: list[tuple[int, int, str, str]],
-    validation_size: int = 0,
-) -> str:
+def fingerprint_labels(rows: list[tuple[int, int, str]]) -> str:
     """Hash the effective labels and encoder configuration deterministically."""
     payload = {
         "rows": sorted(rows),
         "encoder": relevance_embedding.get_cache_config(),
         "linear_c": config.SEMANTIC_FRESHNESS_LINEAR_C,
         "weight_exponent": config.SEMANTIC_FRESHNESS_WEIGHT_EXPONENT,
-        "validation_size": validation_size,
+        "thresholds": THRESHOLDS,
+        "representative_days": REPRESENTATIVE_DAYS.tolist(),
     }
     encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
     return hashlib.sha256(encoded).hexdigest()
@@ -120,7 +111,7 @@ def bucket_probabilities(
     embeddings: np.ndarray,
     classifiers: list[LogisticRegression],
 ) -> np.ndarray:
-    """Return ordered six-bucket probabilities from five cumulative heads."""
+    """Return ordered three-label probabilities from two cumulative heads."""
     if len(classifiers) != len(THRESHOLDS):
         raise ValueError(
             f"Expected {len(THRESHOLDS)} classifiers, got {len(classifiers)}."
@@ -138,7 +129,7 @@ def bucket_probabilities(
 
 
 def expected_lifetime_days(probabilities: np.ndarray) -> np.ndarray:
-    """Calculate expected useful lifetime from the six bucket probabilities."""
+    """Calculate expected useful lifetime from three-label probabilities."""
     probabilities = np.asarray(probabilities, dtype=float)
     if probabilities.ndim != 2 or probabilities.shape[1] != len(HORIZONS):
         raise ValueError(f"Expected probabilities with shape (n, {len(HORIZONS)}).")
@@ -148,10 +139,9 @@ def expected_lifetime_days(probabilities: np.ndarray) -> np.ndarray:
 def artifact_metadata(
     dataset_fingerprint: str,
     train_counts: dict[str, int],
-    validation_metrics: dict[str, float],
     label_source_counts: dict[str, int],
 ) -> dict[str, Any]:
-    """Build the metadata that defines artifact compatibility and provenance."""
+    """Build metadata defining artifact compatibility and provenance."""
     return {
         "backend": "embedding_ordinal_linear",
         "model_key": get_model_key(dataset_fingerprint),
@@ -165,7 +155,6 @@ def artifact_metadata(
         "dataset_fingerprint": dataset_fingerprint,
         "train_counts": train_counts,
         "label_source_counts": label_source_counts,
-        "validation_metrics": validation_metrics,
     }
 
 
@@ -174,7 +163,7 @@ def save_artifact(
     classifiers: list[LogisticRegression],
     metadata: dict[str, Any],
 ) -> None:
-    """Atomically save all five classifiers and their metadata in one file."""
+    """Atomically save both classifiers and their metadata in one file."""
     path = Path(model_path)
     path.mkdir(parents=True, exist_ok=True)
     destination = path / ARTIFACT_FILENAME
@@ -185,11 +174,11 @@ def save_artifact(
         os.replace(temporary_path, destination)
     finally:
         temporary_path.unlink(missing_ok=True)
-    logger.info(f"Saved semantic freshness artifact to {destination}")
+    logger.info(f"Saved freshness artifact to {destination}")
 
 
 def load_artifact(model_path: str) -> tuple[list[LogisticRegression], dict[str, Any]]:
-    """Load a compatible semantic-freshness artifact."""
+    """Load a compatible three-label freshness artifact."""
     artifact = joblib.load(Path(model_path) / ARTIFACT_FILENAME)
     classifiers = artifact.get("classifiers")
     metadata = artifact.get("metadata")

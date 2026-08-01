@@ -4,10 +4,7 @@ join entry_user_tags eut on eut.entry_id = e.id
 join user_tags ut on ut.id = eut.user_tag_id
 where e.status = 'read'
   and ut.user_id = 1
-  and ut.title in (
-      'fresh-lt-24h', 'fresh-1-3d', 'fresh-4-7d',
-      'fresh-8-30d', 'fresh-1-6m', 'fresh-evergreen'
-  )
+  and ut.title in ('fresh_d', 'fresh_m', 'fresh_y')
 group by e.id, e.title
 having count(*) > 1
 order by e.id asc;
