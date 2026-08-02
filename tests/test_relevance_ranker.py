@@ -465,10 +465,11 @@ def test_ranking_metrics_reject_malformed_scores() -> None:
         )
 
 
-def test_super_important_upsert_uses_model_key_and_raw_probability(
+def test_super_important_upsert_syncs_tags_above_50_percent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: list[dict[str, object]] = []
+    tag_syncs: list[dict[str, object]] = []
 
     class Cursor(AbstractAsyncContextManager["Cursor"]):
         async def __aexit__(self, *args: object) -> None:
@@ -481,6 +482,10 @@ def test_super_important_upsert_uses_model_key_and_raw_probability(
         ) -> None:
             assert query == "upsert_super_important_inference.sql"
             captured.extend(rows)
+
+        async def execute(self, query: str, params: dict[str, object]) -> None:
+            assert query == "sync_important_auto_tags.sql"
+            tag_syncs.append(params)
 
     class Connection(AbstractAsyncContextManager["Connection"]):
         async def __aexit__(self, *args: object) -> None:
@@ -496,10 +501,10 @@ def test_super_important_upsert_uses_model_key_and_raw_probability(
     monkeypatch.setattr(dr, "global_pool", Pool())
     monkeypatch.setattr(dr, "_get_query_from_file", lambda filename: filename)
     results = RelevanceInferenceResults(
-        article_ids=[7],
-        article_titles=["Article"],
-        scores=[42.125],
-        super_important_scores=[0.625],
+        article_ids=[7, 8, 9],
+        article_titles=["Below", "Boundary", "Above"],
+        scores=[10.0, 20.0, 42.125],
+        super_important_scores=[0.49, 0.5, 0.625],
         model_key="artifact-v1",
     )
 
@@ -507,9 +512,20 @@ def test_super_important_upsert_uses_model_key_and_raw_probability(
 
     assert captured == [
         {
-            "article_id": 7,
+            "article_id": article_id,
             "model_key": "artifact-v1",
-            "super_important_score": 0.625,
+            "super_important_score": probability,
+        }
+        for article_id, probability in zip(
+            [7, 8, 9],
+            [0.49, 0.5, 0.625],
+            strict=True,
+        )
+    ]
+    assert tag_syncs == [
+        {
+            "important_article_ids": [9],
+            "ordinary_article_ids": [7, 8],
         }
     ]
 

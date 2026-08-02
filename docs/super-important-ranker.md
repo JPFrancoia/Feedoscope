@@ -100,6 +100,17 @@ upsert the raw second-head probability before final-score writing or decay.
 remain separate; the table stores the preference-head output, not the final
 combined-and-decayed `entries.score`.
 
+## Automatic important tag
+
+Every relevance inference synchronizes the visible Miniflux user tag
+`important-auto` in the same database transaction as the probability upsert.
+Articles above 50% receive the tag; articles at or below 50% lose it when they
+are processed again. Other tags are unchanged.
+
+`important-auto` is owned by Feedoscope, so manual changes to that tag may be
+replaced by later inference. Articles outside a run keep their previous tag
+until they are processed again.
+
 ## Weekly benchmark, history, and rollout gate
 
 `make eval` uses mature labels only: labels read in the last 40 days are

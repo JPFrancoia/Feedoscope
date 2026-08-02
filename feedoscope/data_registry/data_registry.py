@@ -678,6 +678,7 @@ async def register_super_important_inference(
         return
 
     query = _get_query_from_file("upsert_super_important_inference.sql")
+    tag_query = _get_query_from_file("sync_important_auto_tags.sql")
     rows = [
         {
             "article_id": article_id,
@@ -691,12 +692,39 @@ async def register_super_important_inference(
         )
     ]
 
+    important_article_ids = [
+        article_id
+        for article_id, score in zip(
+            results.article_ids,
+            results.super_important_scores,
+            strict=True,
+        )
+        if score > 0.5
+    ]
+    ordinary_article_ids = [
+        article_id
+        for article_id, score in zip(
+            results.article_ids,
+            results.super_important_scores,
+            strict=True,
+        )
+        if score <= 0.5
+    ]
+
     async with global_pool.connection() as conn, conn.cursor() as cur:
         await cur.executemany(query, rows)
+        await cur.execute(
+            tag_query,
+            {
+                "important_article_ids": important_article_ids,
+                "ordinary_article_ids": ordinary_article_ids,
+            },
+        )
 
     logger.info(
-        f"Upserted {len(rows)} super-important scores for "
-        f"model_key={results.model_key}."
+        f"Upserted {len(rows)} super-important scores and synchronized "
+        f"important-auto for {len(important_article_ids)} articles above 50% "
+        f"with model_key={results.model_key}."
     )
 
 
