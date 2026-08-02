@@ -102,6 +102,12 @@ RELEVANCE_MLP_MAX_ITER = int(os.getenv("RELEVANCE_MLP_MAX_ITER", "300"))
 # Keep this legacy value for old standalone artifact compatibility only.
 RELEVANCE_LINEAR_C = float(os.getenv("RELEVANCE_LINEAR_C", "5.0"))
 
+# Enable the preference head during production relevance inference. Training and
+# weekly evaluation remain active when this flag is false.
+SUPER_IMPORTANT_INFERENCE_ENABLED = strtobool(
+    os.getenv("SUPER_IMPORTANT_INFERENCE_ENABLED", "False")
+)
+
 # Fixed preference bonus selected by the chronological ranker benchmark.
 SUPER_IMPORTANT_BONUS = float(os.getenv("SUPER_IMPORTANT_BONUS", "0.0"))
 assert (

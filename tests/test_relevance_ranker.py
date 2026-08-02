@@ -155,6 +155,55 @@ def test_latest_model_skips_and_cleans_incomplete_training_run(
     assert not incomplete.exists()
 
 
+def test_inference_flag_bypasses_preference_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    articles = [
+        cast(Article, SimpleNamespace(article_id=1, title="First")),
+        cast(Article, SimpleNamespace(article_id=2, title="Second")),
+    ]
+    predicted_with: list[str] = []
+
+    async def encode(*_: object, **__: object) -> np.ndarray:
+        return np.array([[1.0], [2.0]])
+
+    def predict(_: np.ndarray, classifier: str) -> np.ndarray:
+        predicted_with.append(classifier)
+        return np.array([0.8, 0.3])
+
+    monkeypatch.setattr(llm_infer.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(llm_infer.config, "ALLOW_INFERENCE_WO_GPU", True)
+    monkeypatch.setattr(llm_infer.config, "SUPER_IMPORTANT_INFERENCE_ENABLED", False)
+    monkeypatch.setattr(llm_infer.config, "SUPER_IMPORTANT_BONUS", 0.5)
+    monkeypatch.setattr(
+        llm_infer,
+        "find_latest_model",
+        lambda *_, **__: "models/relevance-test",
+    )
+    monkeypatch.setattr(
+        relevance_embedding,
+        "load_two_head_artifact",
+        lambda _: ("relevance", "preference"),
+    )
+    monkeypatch.setattr(
+        relevance_embedding,
+        "load_encoder",
+        lambda _: ("tokenizer", "encoder"),
+    )
+    monkeypatch.setattr(relevance_embedding, "encode_articles", encode)
+    monkeypatch.setattr(
+        relevance_embedding,
+        "predict_probabilities_from_embeddings",
+        predict,
+    )
+
+    results = asyncio.run(llm_infer.infer(articles))
+
+    assert results.scores == [80.0, 30.0]
+    assert results.super_important_scores == []
+    assert predicted_with == ["relevance"]
+
+
 def test_chronological_split_excludes_unsettled_labels() -> None:
     now = datetime(2026, 8, 1, tzinfo=timezone.utc)
     articles = [
