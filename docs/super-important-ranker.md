@@ -139,9 +139,9 @@ window.
 
 ## Recorded rollout and future retuning
 
-The deployed image is `220a648` with `SUPER_IMPORTANT_BONUS=0.5`, the 50%
-decision-boundary ramp, batched score writes, progress logging, age-block
-inference, and stale downvote cleanup. Training used 6,323 good, 1,357 bad, and
+The deployed image is `5beff4d` with `SUPER_IMPORTANT_BONUS=0.5`, the 50%
+decision-boundary ramp, `important-auto` tag synchronization, batched score
+writes, progress logging, age-block inference, and stale downvote cleanup. Training used 6,323 good, 1,357 bad, and
 194 super-important labels. A controlled 365-day refresh scored 55,003 articles,
 and a final `[0, 30)` block verified the deployed operational path.
 

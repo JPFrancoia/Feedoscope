@@ -1,6 +1,6 @@
 # Automatic super-important tag plan
 
-**Status:** Validation and rollout in progress — 2026-08-01
+**Status:** Completed — 2026-08-02
 
 ## 1. Brief
 
@@ -56,10 +56,10 @@ The threshold comparison will be strictly `> 0.5`, matching ranker behavior.
 - [x] Add focused threshold and parameter tests.
 - [x] Run the full validation suite.
 - [x] Update implemented-behavior documentation.
-- [ ] Commit, build, and push the new image.
-- [ ] Deploy the image through the infrastructure repository.
-- [ ] Backfill current above-threshold predictions and verify counts.
-- [ ] Mark this plan completed with rollout evidence.
+- [x] Commit, build, and push image `5beff4d`.
+- [x] Deploy `5beff4d` to every Feedoscope CronJob through infrastructure commit `6946695`.
+- [x] Backfill current above-threshold predictions: 29 tags inserted, covering 28 unread and one read article.
+- [x] Mark this plan completed. Production and registry verification confirmed image `5beff4d`; stored current-model predictions and `important-auto` assignments have no mismatches.
 
 ## 8. Open questions / assumptions
 
