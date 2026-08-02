@@ -30,6 +30,9 @@ train:
 infer:
 	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.llm_infer
 
+warm_embeddings:
+	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.warm_relevance_embeddings
+
 time:
 	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.infer_time_sensitivity
 

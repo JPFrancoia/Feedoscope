@@ -18,9 +18,9 @@ logger = logging.getLogger(__name__)
 def get_model_family_prefix() -> str:
     """Return the artifact family prefix for urgency embedding models."""
     return (
-        f"urgency_{config.RELEVANCE_MODEL_NAME.replace('/', '-')}_"
+        f"urgency_{config.RELEVANCE_EMBEDDING_KEY.replace('/', '-')}_"
         f"{config.RELEVANCE_MAX_LENGTH}_{config.RELEVANCE_TEXT_PREP_MODE}_"
-        f"embedding_linear_c{config.URGENCY_LINEAR_C}"
+        f"p{config.RELEVANCE_PREP_VERSION}_embedding_linear_c{config.URGENCY_LINEAR_C}"
     )
 
 
@@ -28,10 +28,11 @@ def get_model_key() -> str:
     """Return the cache key for the active urgency backend configuration."""
     return (
         "urgency-embedding_linear::"
-        f"{config.RELEVANCE_MODEL_NAME}::"
+        f"{config.RELEVANCE_EMBEDDING_KEY}::"
         f"{config.RELEVANCE_MAX_LENGTH}::"
         f"{config.RELEVANCE_TEXT_PREP_MODE}::"
         f"{config.RELEVANCE_PREP_VERSION}::"
+        f"prompt={config.RELEVANCE_EMBEDDING_PROMPT}::"
         f"c={config.URGENCY_LINEAR_C}"
     )
 
@@ -75,7 +76,7 @@ def save_artifact(
     joblib.dump(classifier, path / relevance_embedding.CLASSIFIER_FILENAME)
     metadata = {
         "backend": "embedding_linear",
-        "model_name": config.RELEVANCE_MODEL_NAME,
+        "model_name": config.RELEVANCE_EMBEDDING_KEY,
         "encoder_cache_path": str(relevance_embedding.get_encoder_cache_path()),
         "max_length": config.RELEVANCE_MAX_LENGTH,
         "text_prep_mode": config.RELEVANCE_TEXT_PREP_MODE,

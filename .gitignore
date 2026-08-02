@@ -6,9 +6,10 @@
 *saved_models*
 models/
 
-# Private autoresearch inputs and teacher outputs; never commit.
+# Private experiment inputs and outputs; never commit.
 .auto/data/
 .auto/sessions/
+artifacts/
 test_token.py
 
 *.pkl

@@ -5,12 +5,14 @@ import math
 import os
 from pathlib import Path
 import tempfile
+from typing import Any
 
 from huggingface_hub import snapshot_download
 from huggingface_hub.errors import GatedRepoError
 import joblib  # type: ignore[import-untyped]
 import numpy as np
 from sklearn.linear_model import LogisticRegression
+from sklearn.neural_network import MLPClassifier
 import torch
 from transformers import AutoModel, AutoTokenizer, PreTrainedTokenizerBase
 
@@ -22,9 +24,9 @@ logger = logging.getLogger(__name__)
 
 CLASSIFIER_FILENAME = "classifier.joblib"
 METADATA_FILENAME = "metadata.json"
-TWO_HEAD_ARTIFACT_FILENAME = "relevance_two_head.joblib"
-TWO_HEAD_ARTIFACT_VERSION = 1
-TWO_HEAD_BACKEND = "embedding_linear_two_head"
+TWO_HEAD_ARTIFACT_FILENAME = "relevance_two_head_mlp.joblib"
+TWO_HEAD_ARTIFACT_VERSION = 2
+TWO_HEAD_BACKEND = "embedding_prompted_mlp_two_head"
 TWO_HEAD_LABEL_CONTRACT = {
     "relevance_positive": "read and vote >= 0",
     "relevance_negative": "vote = -1",
@@ -60,9 +62,10 @@ def get_encoder_cache_path() -> Path:
 def get_model_family_prefix() -> str:
     """Return the versioned artifact family for two-head relevance models."""
     return (
-        f"relevance_two_head_{config.RELEVANCE_MODEL_NAME.replace('/', '-')}_"
+        f"relevance_two_head_{config.RELEVANCE_EMBEDDING_KEY.replace('/', '-')}_"
         f"{config.RELEVANCE_MAX_LENGTH}_{config.RELEVANCE_TEXT_PREP_MODE}_"
-        f"p{config.RELEVANCE_PREP_VERSION}_embedding_linear_c{config.RELEVANCE_LINEAR_C}"
+        f"p{config.RELEVANCE_PREP_VERSION}_prompted_mlp_"
+        f"h{config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE}_a{config.RELEVANCE_MLP_ALPHA}"
     )
 
 
@@ -147,10 +150,11 @@ def load_encoder(
 def get_cache_config() -> dict[str, str | int]:
     """Return the configuration values that define the embedding output."""
     return {
-        "model_name": config.RELEVANCE_MODEL_NAME,
+        "model_name": config.RELEVANCE_EMBEDDING_KEY,
         "max_length": config.RELEVANCE_MAX_LENGTH,
         "text_prep_mode": config.RELEVANCE_TEXT_PREP_MODE,
         "prep_version": config.RELEVANCE_PREP_VERSION,
+        "prompt": config.RELEVANCE_EMBEDDING_PROMPT,
     }
 
 
@@ -178,13 +182,19 @@ def prepare_articles_text(
         f"Preparing {pipeline_name} text for {len(articles)} articles using "
         f"{config.RELEVANCE_TEXT_PREP_MODE}"
     )
+    prompt = config.RELEVANCE_EMBEDDING_PROMPT
+    prompt_tokens = len(tokenizer.encode(prompt, add_special_tokens=False))
+    article_budget = config.RELEVANCE_MAX_LENGTH - prompt_tokens
+    if article_budget <= 4:
+        raise RuntimeError("Relevance embedding prompt leaves no article token budget")
     texts: list[str] = []
     for start in range(0, len(articles), 1000):
         texts.extend(
-            relevance_text.prepare_articles_text(
+            prompt + text
+            for text in relevance_text.prepare_articles_text(
                 articles[start : start + 1000],
                 tokenizer=tokenizer,
-                max_length=config.RELEVANCE_MAX_LENGTH,
+                max_length=article_budget,
                 mode=config.RELEVANCE_TEXT_PREP_MODE,
             )
         )
@@ -348,13 +358,34 @@ def fit_classifier(
     labels: np.ndarray,
     pipeline_label: str = "relevance",
     sample_weights: np.ndarray | None = None,
-) -> LogisticRegression:
-    """Fit a logistic-regression head on frozen embeddings."""
+) -> MLPClassifier:
+    """Fit the configured prompted-embedding relevance MLP head."""
+    if sample_weights is not None:
+        raise ValueError("The prompted relevance MLP does not use sample weights")
     pipeline_name = _pipeline_name(pipeline_label)
     logger.info(
-        f"Fitting {pipeline_name} logistic regression on {len(labels)} rows with "
-        f"C={config.RELEVANCE_LINEAR_C}"
+        f"Fitting {pipeline_name} MLP on {len(labels)} rows with "
+        f"{config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE} hidden units"
     )
+    classifier = MLPClassifier(
+        hidden_layer_sizes=(config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE,),
+        alpha=config.RELEVANCE_MLP_ALPHA,
+        early_stopping=True,
+        max_iter=config.RELEVANCE_MLP_MAX_ITER,
+        random_state=42,
+    )
+    classifier.fit(embeddings, labels)
+    logger.info(f"{_pipeline_title(pipeline_label)} MLP fit completed")
+    return classifier
+
+
+def fit_logistic_classifier(
+    embeddings: np.ndarray,
+    labels: np.ndarray,
+    pipeline_label: str,
+    sample_weights: np.ndarray | None = None,
+) -> LogisticRegression:
+    """Fit a deterministic logistic head for a non-relevance pipeline."""
     classifier = LogisticRegression(
         max_iter=4000,
         C=config.RELEVANCE_LINEAR_C,
@@ -373,7 +404,10 @@ def build_two_head_metadata(
         "artifact_version": TWO_HEAD_ARTIFACT_VERSION,
         "backend": TWO_HEAD_BACKEND,
         "encoder": get_cache_config(),
-        "linear_c": config.RELEVANCE_LINEAR_C,
+        "mlp_hidden_layer_size": config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE,
+        "mlp_alpha": config.RELEVANCE_MLP_ALPHA,
+        "mlp_max_iter": config.RELEVANCE_MLP_MAX_ITER,
+        "super_important_linear_c": config.RELEVANCE_LINEAR_C,
         "label_contract": TWO_HEAD_LABEL_CONTRACT,
         "train_counts": train_counts,
     }
@@ -381,7 +415,7 @@ def build_two_head_metadata(
 
 def save_two_head_artifact(
     model_path: str,
-    relevance_classifier: LogisticRegression,
+    relevance_classifier: MLPClassifier,
     super_important_classifier: LogisticRegression,
     train_counts: dict[str, int],
 ) -> None:
@@ -406,7 +440,7 @@ def save_two_head_artifact(
 
 def load_two_head_artifact(
     model_path: str,
-) -> tuple[LogisticRegression, LogisticRegression]:
+) -> tuple[MLPClassifier, LogisticRegression]:
     """Load a compatible two-head relevance artifact."""
     artifact = joblib.load(Path(model_path) / TWO_HEAD_ARTIFACT_FILENAME)
     if not isinstance(artifact, dict):
@@ -418,13 +452,17 @@ def load_two_head_artifact(
     metadata = artifact.get("metadata")
     train_counts = metadata.get("train_counts") if isinstance(metadata, dict) else None
     if (
-        not isinstance(relevance_classifier, LogisticRegression)
+        not isinstance(relevance_classifier, MLPClassifier)
         or not isinstance(super_important_classifier, LogisticRegression)
         or not isinstance(metadata, dict)
         or metadata.get("artifact_version") != TWO_HEAD_ARTIFACT_VERSION
         or metadata.get("backend") != TWO_HEAD_BACKEND
         or metadata.get("encoder") != get_cache_config()
-        or metadata.get("linear_c") != config.RELEVANCE_LINEAR_C
+        or metadata.get("mlp_hidden_layer_size")
+        != config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE
+        or metadata.get("mlp_alpha") != config.RELEVANCE_MLP_ALPHA
+        or metadata.get("mlp_max_iter") != config.RELEVANCE_MLP_MAX_ITER
+        or metadata.get("super_important_linear_c") != config.RELEVANCE_LINEAR_C
         or metadata.get("label_contract") != TWO_HEAD_LABEL_CONTRACT
         or not isinstance(train_counts, dict)
         or set(train_counts) != TWO_HEAD_TRAIN_COUNT_KEYS
@@ -500,7 +538,7 @@ def load_classifier(
 
 def predict_probabilities_from_embeddings(
     embeddings: np.ndarray,
-    classifier: LogisticRegression,
+    classifier: Any,
 ) -> np.ndarray:
     """Predict clipped positive-class probabilities from prepared embeddings."""
     if not len(embeddings):
@@ -513,7 +551,7 @@ async def predict_probabilities(
     articles: list[Article],
     tokenizer: PreTrainedTokenizerBase,
     model: torch.nn.Module,
-    classifier: LogisticRegression,
+    classifier: Any,
     device: torch.device,
     pipeline_label: str = "relevance",
 ) -> np.ndarray:

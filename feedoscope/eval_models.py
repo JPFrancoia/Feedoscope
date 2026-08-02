@@ -18,6 +18,7 @@ import os
 import random
 import shutil
 import time
+from typing import Any
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
@@ -312,7 +313,7 @@ def _super_important_partition_counts(articles: list[Article]) -> dict[str, int]
 def _fit_super_important_rankers(
     embeddings: np.ndarray,
     articles: list[Article],
-) -> tuple[LogisticRegression, LogisticRegression, LogisticRegression]:
+) -> tuple[LogisticRegression, object, object]:
     """Fit the weighted baseline and both unweighted ranker heads."""
     relevance_labels = np.asarray(
         [article.status == "read" and article.vote >= 0 for article in articles],
@@ -322,7 +323,7 @@ def _fit_super_important_rankers(
         [relevance_embedding.is_super_important(article) for article in articles],
         dtype=int,
     )
-    weighted_classifier = relevance_embedding.fit_classifier(
+    weighted_classifier = relevance_embedding.fit_logistic_classifier(
         embeddings,
         relevance_labels,
         pipeline_label="weighted relevance baseline",
@@ -338,7 +339,7 @@ def _fit_super_important_rankers(
         pipeline_label="unweighted relevance",
     )
     read_mask = relevance_labels.astype(bool)
-    super_important_classifier = relevance_embedding.fit_classifier(
+    super_important_classifier = relevance_embedding.fit_logistic_classifier(
         embeddings[read_mask],
         super_important_labels[read_mask],
         pipeline_label="super-important",
@@ -390,6 +391,13 @@ def compute_and_log_metrics(
     return metrics
 
 
+def evaluation_model_label(model_name: str) -> str:
+    """Return the implementation label for one evaluation pipeline."""
+    if model_name == "Relevance":
+        return "EmbeddingGemma 300M prompted + MLP"
+    return "EmbeddingGemma 300M prompted + logistic regression"
+
+
 async def save_eval_results(
     model_name: str,
     training_counts: dict[str, int],
@@ -411,9 +419,11 @@ async def save_eval_results(
 
     """
     eval_date = datetime.date.today()
+    evaluation_model = evaluation_model_label(model_name)
     record = {
         "date": eval_date.isoformat(),
         "model": model_name,
+        "evaluation_model": evaluation_model,
         "training": training_counts,
         "eval": eval_counts,
         "metrics": metrics,
@@ -440,6 +450,7 @@ async def save_eval_results(
     await dr.insert_model_eval(
         eval_date=eval_date,
         model_name=model_name,
+        evaluation_model=evaluation_model,
         training_counts=training_counts,
         eval_counts=eval_counts,
         metrics=metrics,
@@ -449,7 +460,7 @@ async def save_eval_results(
 async def _run_relevance_inference(
     encoder: torch.nn.Module,
     tokenizer: PreTrainedTokenizerBase,
-    classifier: LogisticRegression,
+    classifier: Any,
     articles: list[Article],
     device: torch.device,
 ) -> np.ndarray:

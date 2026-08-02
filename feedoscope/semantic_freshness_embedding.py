@@ -24,7 +24,7 @@ ARTIFACT_FILENAME = "semantic_freshness.joblib"
 def get_model_family_prefix() -> str:
     """Return the artifact family prefix for three-label freshness models."""
     return (
-        f"freshness_3label_{config.RELEVANCE_MODEL_NAME.replace('/', '-')}_"
+        f"freshness_3label_{config.RELEVANCE_EMBEDDING_KEY.replace('/', '-')}_"
         f"{config.RELEVANCE_MAX_LENGTH}_{config.RELEVANCE_TEXT_PREP_MODE}_"
         f"p{config.RELEVANCE_PREP_VERSION}_"
         f"embedding_linear_c{config.SEMANTIC_FRESHNESS_LINEAR_C}_"
@@ -36,8 +36,9 @@ def get_model_key(dataset_fingerprint: str | None = None) -> str:
     """Return a configuration key, optionally pinned to one label fingerprint."""
     key = (
         "freshness-3label-embedding_linear::"
-        f"{config.RELEVANCE_MODEL_NAME}::{config.RELEVANCE_MAX_LENGTH}::"
+        f"{config.RELEVANCE_EMBEDDING_KEY}::{config.RELEVANCE_MAX_LENGTH}::"
         f"{config.RELEVANCE_TEXT_PREP_MODE}::{config.RELEVANCE_PREP_VERSION}::"
+        f"prompt={config.RELEVANCE_EMBEDDING_PROMPT}::"
         f"c={config.SEMANTIC_FRESHNESS_LINEAR_C}::"
         f"weight_exponent={config.SEMANTIC_FRESHNESS_WEIGHT_EXPONENT}"
     )

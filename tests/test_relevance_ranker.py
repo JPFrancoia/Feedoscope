@@ -9,10 +9,36 @@ import joblib  # type: ignore[import-untyped]
 import numpy as np
 import pytest
 from sklearn.linear_model import LogisticRegression
+from sklearn.neural_network import MLPClassifier
+from transformers import PreTrainedTokenizerBase
 
 from feedoscope import eval_models, llm_infer, relevance_embedding
 from feedoscope.data_registry import data_registry as dr
 from feedoscope.entities import Article, RelevanceInferenceResults
+
+
+def test_prompted_embedding_key_and_text_are_distinct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tokenizer = cast(
+        PreTrainedTokenizerBase,
+        SimpleNamespace(encode=lambda text, **_: text.split()),
+    )
+    monkeypatch.setattr(
+        relevance_embedding.relevance_text,
+        "prepare_articles_text",
+        lambda *_, **kwargs: [f"article-budget-{kwargs['max_length']}"],
+    )
+
+    cache = relevance_embedding.get_cache_config()
+    texts = relevance_embedding.prepare_articles_text(
+        [cast(Article, SimpleNamespace())],
+        tokenizer,
+    )
+
+    assert cache["model_name"] == "google/embeddinggemma-300m-classification-v1"
+    assert cache["prompt"] == "task: classification | query: "
+    assert texts == ["task: classification | query: article-budget-2044"]
 
 
 def test_explicit_preference_label_uses_star_or_upvote() -> None:
@@ -70,7 +96,7 @@ def test_combined_score_applies_bonus_only_above_decision_threshold() -> None:
 def test_two_head_artifact_round_trip_and_rejects_old_shape(tmp_path: Path) -> None:
     embeddings = np.array([[0.0], [1.0], [2.0], [3.0]])
     labels = np.array([0, 0, 1, 1])
-    relevance_classifier = LogisticRegression().fit(embeddings, labels)
+    relevance_classifier = MLPClassifier(random_state=42).fit(embeddings, labels)
     super_important_classifier = LogisticRegression().fit(embeddings, labels)
 
     relevance_embedding.save_two_head_artifact(

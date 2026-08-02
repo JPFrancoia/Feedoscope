@@ -61,6 +61,21 @@ def _format_embedding_bytes(embedding: np.ndarray) -> bytes:
     return np.asarray(embedding, dtype=np.float32).tobytes()
 
 
+async def get_articles_for_embedding_warm(
+    after_article_id: int,
+    batch_size: int,
+) -> list[Article]:
+    """Return one ascending entry batch for the resumable embedding warmer."""
+    query = _get_query_from_file("get_articles_for_embedding_warm.sql")
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(
+            query,
+            {"after_article_id": after_article_id, "batch_size": batch_size},
+        )
+        data = await cur.fetchall()
+    return [Article(**article) for article in data]
+
+
 async def get_read_articles_training(
     validation_size: int = 100,
 ) -> list[Article]:
@@ -337,6 +352,7 @@ async def update_scores(
 async def insert_model_eval(
     eval_date: datetime.date,
     model_name: str,
+    evaluation_model: str,
     training_counts: dict[str, int],
     eval_counts: dict[str, int],
     metrics: Mapping[str, float | None],
@@ -345,7 +361,8 @@ async def insert_model_eval(
 
     Args:
         eval_date: Date the evaluation ran.
-        model_name: Name of the evaluated model.
+        model_name: Name of the evaluated model section.
+        evaluation_model: Encoder and prediction algorithm used for evaluation.
         training_counts: Training sample counts by class.
         eval_counts: Evaluation sample counts by class.
         metrics: Classification metrics from the evaluation run.
@@ -359,6 +376,7 @@ async def insert_model_eval(
             {
                 "eval_date": eval_date,
                 "model_name": model_name,
+                "evaluation_model": evaluation_model,
                 "training": Jsonb(training_counts),
                 "eval_counts": Jsonb(eval_counts),
                 "metrics_accuracy": metrics.get("accuracy"),

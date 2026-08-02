@@ -59,6 +59,16 @@ VALIDATION_SIZE = int(os.getenv("VALIDATION_SIZE", "0"))
 # Hugging Face model ID for the frozen relevance embedding encoder.
 RELEVANCE_MODEL_NAME = os.getenv("RELEVANCE_MODEL_NAME", "google/embeddinggemma-300m")
 
+# Stable cache key for prompted shared embeddings. This is separate from the
+# Hugging Face source ID because the prompt changes vector values.
+RELEVANCE_EMBEDDING_KEY = os.getenv(
+    "RELEVANCE_EMBEDDING_KEY",
+    "google/embeddinggemma-300m-classification-v1",
+)
+RELEVANCE_EMBEDDING_PROMPT = os.getenv(
+    "RELEVANCE_EMBEDDING_PROMPT", "task: classification | query: "
+)
+
 # Maximum token budget used both when preparing relevance text and when encoding
 # it with the frozen Gemma model.
 RELEVANCE_MAX_LENGTH = int(os.getenv("RELEVANCE_MAX_LENGTH", "2048"))
@@ -76,14 +86,20 @@ RELEVANCE_TEXT_PREP_MODE = cast(
 
 # Explicit cache-busting version for relevance text preparation. Bump this when
 # changing text-cleaning or truncation logic so stale embeddings are recomputed.
-RELEVANCE_PREP_VERSION = int(os.getenv("RELEVANCE_PREP_VERSION", "1"))
+RELEVANCE_PREP_VERSION = int(os.getenv("RELEVANCE_PREP_VERSION", "2"))
 
 # Batch size for frozen relevance embedding generation. Higher values can speed
 # up inference and training if enough GPU memory is available.
 RELEVANCE_ENCODER_BATCH_SIZE = int(os.getenv("RELEVANCE_ENCODER_BATCH_SIZE", "4"))
 
-# Inverse regularization strength for the logistic-regression relevance head.
-# This affects only the classifier fit, not the embedding cache itself.
+# Prompted relevance uses a deterministic small MLP. These values affect only
+# the relevance classifier artifact, not the shared embedding cache.
+RELEVANCE_MLP_HIDDEN_LAYER_SIZE = int(
+    os.getenv("RELEVANCE_MLP_HIDDEN_LAYER_SIZE", "64")
+)
+RELEVANCE_MLP_ALPHA = float(os.getenv("RELEVANCE_MLP_ALPHA", "0.0001"))
+RELEVANCE_MLP_MAX_ITER = int(os.getenv("RELEVANCE_MLP_MAX_ITER", "300"))
+# Keep this legacy value for old standalone artifact compatibility only.
 RELEVANCE_LINEAR_C = float(os.getenv("RELEVANCE_LINEAR_C", "5.0"))
 
 # Fixed preference bonus selected by the chronological ranker benchmark.

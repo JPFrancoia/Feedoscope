@@ -3,7 +3,7 @@
 ## Project Overview
 
 Feedoscope is a Python ML pipeline that scores RSS articles from a Miniflux database
-by relevance (EmbeddingGemma embeddings + logistic regression) and urgency (fine-tuned ModernBERT), plus time
+by relevance (prompted EmbeddingGemma embeddings + MLP) and urgency (fine-tuned ModernBERT), plus time
 sensitivity (local Ministral-8B via
 llama.cpp). It reads from and writes to a PostgreSQL database (Miniflux schema with
 custom extensions). Deployed on Kubernetes via Docker images with CUDA/GPU support.

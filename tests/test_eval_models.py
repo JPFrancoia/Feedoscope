@@ -126,6 +126,43 @@ def test_freshness_eval_uses_newest_rows_for_holdout(
     }
 
 
+def test_evaluation_model_label_identifies_each_prompted_head() -> None:
+    assert (
+        eval_models.evaluation_model_label("Relevance")
+        == "EmbeddingGemma 300M prompted + MLP"
+    )
+    assert (
+        eval_models.evaluation_model_label("Urgency")
+        == "EmbeddingGemma 300M prompted + logistic regression"
+    )
+
+
+def test_save_eval_results_persists_evaluation_model(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    history_path = tmp_path / "eval_history.json"
+    captured: dict[str, object] = {}
+
+    async def insert_model_eval(**kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(eval_models, "EVAL_HISTORY_PATH", str(history_path))
+    monkeypatch.setattr(eval_models.dr, "insert_model_eval", insert_model_eval)
+
+    asyncio.run(
+        eval_models.save_eval_results(
+            "Relevance",
+            {"good": 1},
+            {"bad": 1},
+            {"f1": 0.5},
+        )
+    )
+
+    record = history_path.read_text()
+    assert '"evaluation_model": "EmbeddingGemma 300M prompted + MLP"' in record
+    assert captured["evaluation_model"] == "EmbeddingGemma 300M prompted + MLP"
+
+
 def test_insert_model_eval_maps_nullable_model_specific_metrics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -156,6 +193,7 @@ def test_insert_model_eval_maps_nullable_model_specific_metrics(
         dr.insert_model_eval(
             datetime.date(2026, 8, 1),
             "Freshness",
+            "EmbeddingGemma 300M + logistic regression",
             {"fresh_d": 1},
             {"fresh_y": 1},
             {
@@ -168,6 +206,7 @@ def test_insert_model_eval_maps_nullable_model_specific_metrics(
         )
     )
 
+    assert captured["evaluation_model"] == "EmbeddingGemma 300M + logistic regression"
     assert captured["metrics_accuracy"] is None
     assert captured["metrics_f1"] == 0.75
     assert captured["metrics_roc_auc"] is None
@@ -180,6 +219,7 @@ def test_insert_model_eval_maps_nullable_model_specific_metrics(
         dr.insert_model_eval(
             datetime.date(2026, 8, 1),
             "Relevance",
+            "EmbeddingGemma 300M + logistic regression",
             {"good": 1},
             {"bad": 1},
             {
@@ -211,6 +251,7 @@ def test_insert_model_eval_maps_nullable_model_specific_metrics(
         dr.insert_model_eval(
             datetime.date(2026, 8, 1),
             "Super-important",
+            "EmbeddingGemma 300M + logistic regression",
             {"super_important": 10, "ordinary_read": 20, "bad": 30},
             {"super_important": 5, "ordinary_read": 10, "bad": 15},
             {

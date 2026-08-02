@@ -14,6 +14,7 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
+from sklearn.neural_network import MLPClassifier
 import torch
 from transformers import PreTrainedTokenizerBase
 
@@ -48,7 +49,7 @@ async def predict_combined_probabilities(
     articles: list[Article],
     tokenizer: PreTrainedTokenizerBase,
     encoder: torch.nn.Module,
-    relevance_classifier: LogisticRegression,
+    relevance_classifier: MLPClassifier,
     super_important_classifier: LogisticRegression,
     device: torch.device,
 ) -> np.ndarray:
@@ -87,7 +88,7 @@ async def train_model(
 ) -> tuple[
     torch.nn.Module,
     PreTrainedTokenizerBase,
-    LogisticRegression,
+    MLPClassifier,
     LogisticRegression,
 ]:
     """Train relevance and super-important heads from one embedding matrix."""
@@ -124,7 +125,7 @@ async def train_model(
         relevance_labels,
         pipeline_label="relevance",
     )
-    super_important_classifier = relevance_embedding.fit_classifier(
+    super_important_classifier = relevance_embedding.fit_logistic_classifier(
         embeddings[: len(good_articles)],
         super_important_labels,
         pipeline_label="super-important",
