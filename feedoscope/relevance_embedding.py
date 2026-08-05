@@ -54,6 +54,19 @@ def _pipeline_title(pipeline_label: str) -> str:
     return _pipeline_name(pipeline_label).capitalize()
 
 
+def spread_relevance_score(score: float) -> float:
+    """Spread a final 0-100 score while preserving its ranking order."""
+    normalized = score / 100
+    if not 0 <= normalized <= 1:
+        raise ValueError("score must be between 0 and 100")
+    return (1 - math.cbrt(1 - normalized)) * 100
+
+
+def prepare_scores_for_storage(scores: list[float]) -> list[int]:
+    """Spread and round final scores for integer database storage."""
+    return [round(spread_relevance_score(score)) for score in scores]
+
+
 def get_encoder_cache_path() -> Path:
     """Return the shared on-disk cache path for the configured encoder."""
     return ENCODER_CACHE_ROOT / config.RELEVANCE_MODEL_NAME.replace("/", "--")

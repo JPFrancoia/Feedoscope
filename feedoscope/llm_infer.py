@@ -183,7 +183,7 @@ async def main() -> None:
     await dr.update_scores(
         article_ids=results.article_ids,
         article_titles=results.article_titles,
-        scores=[round(score) for score in results.scores],
+        scores=relevance_embedding.prepare_scores_for_storage(results.scores),
     )
     logger.debug(
         f"Scores updated in the database for {len(results.article_ids)} articles."

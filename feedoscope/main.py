@@ -11,6 +11,7 @@ from feedoscope import (
     llm_infer,
     llm_infer_semantic_freshness,
     llm_infer_urgency,
+    relevance_embedding,
 )
 from feedoscope.data_registry import data_registry as dr
 from feedoscope.utils import clean_title
@@ -90,7 +91,7 @@ def decay_relevance_score(
     original_score: float,
     date_entered: datetime,
     half_life_days: float,
-) -> int:
+) -> float:
     """Apply exponential time decay using a concrete half-life in days.
 
     Args:
@@ -99,7 +100,7 @@ def decay_relevance_score(
         half_life_days: Days until the score is halved.
 
     Returns:
-        The decayed relevance score.
+        The unrounded decayed relevance score.
 
     Raises:
         ValueError: If the half-life is not finite and positive.
@@ -115,7 +116,7 @@ def decay_relevance_score(
         -math.log(2) * days_passed / half_life_days
     )
 
-    return int(round(decayed_score))
+    return decayed_score
 
 
 async def main(
@@ -272,7 +273,9 @@ async def main(
         await dr.update_scores(
             article_ids=relevance_scores.article_ids,
             article_titles=relevance_scores.article_titles,
-            scores=[round(score) for score in relevance_scores.scores],
+            scores=relevance_embedding.prepare_scores_for_storage(
+                relevance_scores.scores
+            ),
         )
 
         db_write_time = time.time() - inference_time - start_time

@@ -26,7 +26,50 @@ def test_semantic_lifetime_is_score_half_life() -> None:
         half_life_days=10,
     )
 
-    assert score == 50
+    assert score == pytest.approx(50, abs=0.001)
+
+
+@pytest.mark.parametrize(
+    ("score", "expected"),
+    (
+        (0, 0),
+        (10, 3.4511),
+        (50, 20.6299),
+        (90, 53.5841),
+        (99, 78.4557),
+        (100, 100),
+    ),
+)
+def test_relevance_score_spreading(score: float, expected: float) -> None:
+    assert main.relevance_embedding.spread_relevance_score(score) == pytest.approx(
+        expected, abs=0.001
+    )
+
+
+def test_relevance_score_spreading_preserves_order() -> None:
+    scores = range(101)
+    spread_scores = [
+        main.relevance_embedding.spread_relevance_score(score) for score in scores
+    ]
+
+    assert all(left < right for left, right in zip(spread_scores, spread_scores[1:]))
+
+
+def test_decay_precedes_score_spreading_and_rounding() -> None:
+    decayed_score = main.decay_relevance_score(
+        original_score=99,
+        date_entered=datetime.now(timezone.utc) - timedelta(days=10),
+        half_life_days=10,
+    )
+
+    assert decayed_score == pytest.approx(49.5, abs=0.001)
+    assert main.relevance_embedding.prepare_scores_for_storage([decayed_score]) == [20]
+
+
+@pytest.mark.parametrize("score", (-1, 101, float("nan"), float("inf")))
+def test_invalid_relevance_score_is_rejected(score: float) -> None:
+    with pytest.raises(ValueError, match="between 0 and 100"):
+        main.relevance_embedding.spread_relevance_score(score)
 
 
 @pytest.mark.parametrize(
