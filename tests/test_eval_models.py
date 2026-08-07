@@ -11,67 +11,61 @@ from feedoscope.data_registry import data_registry as dr
 
 
 def test_perfect_relevance_ranking_metrics() -> None:
-    labels = np.array([1] * 10 + [0] * 10)
-    probabilities = np.arange(20, 0, -1, dtype=float)
+    labels = np.array([1] * 50 + [0] * 50)
+    probabilities = np.arange(100, 0, -1, dtype=float)
 
     metrics = eval_models.compute_relevance_metrics(labels, probabilities)
 
-    assert metrics["roc_auc"] == 1.0
-    assert metrics["average_precision"] == pytest.approx(1.0)
-    assert metrics["recall_at_10"] == 1.0
-    assert metrics["recall_at_25"] == 1.0
-    assert metrics["recall_at_50"] == 1.0
+    assert metrics == {
+        "roc_auc": 1.0,
+        "average_precision": pytest.approx(1.0),
+        "precision_at_50": 1.0,
+    }
 
 
-def test_reversed_relevance_ranking_has_lower_top_recall() -> None:
-    labels = np.array([1] * 10 + [0] * 10)
-    perfect = eval_models.compute_relevance_metrics(
-        labels, np.arange(20, 0, -1, dtype=float)
-    )
-    reversed_ranking = eval_models.compute_relevance_metrics(
-        labels, np.arange(1, 21, dtype=float)
+def test_relevance_precision_at_50_counts_top_results() -> None:
+    labels = np.array([1] * 47 + [0] * 3 + [1] * 53 + [0] * 97)
+    metrics = eval_models.compute_relevance_metrics(
+        labels, np.arange(200, 0, -1, dtype=float)
     )
 
-    reversed_recall = reversed_ranking["recall_at_10"]
-    perfect_recall = perfect["recall_at_10"]
-    reversed_ap = reversed_ranking["average_precision"]
-    perfect_ap = perfect["average_precision"]
-    assert reversed_recall is not None and perfect_recall is not None
-    assert reversed_ap is not None and perfect_ap is not None
-    assert reversed_recall < perfect_recall
-    assert reversed_ap < perfect_ap
+    assert metrics["precision_at_50"] == 0.94
 
 
-def test_relevance_recall_clamps_k_to_candidate_count() -> None:
+def test_relevance_precision_clamps_to_candidate_count() -> None:
     metrics = eval_models.compute_relevance_metrics(
         np.array([1, 0, 1, 0]),
         np.array([0.9, 0.8, 0.7, 0.6]),
     )
 
-    assert metrics["recall_at_10"] == 1.0
-    assert metrics["recall_at_25"] == 1.0
-    assert metrics["recall_at_50"] == 1.0
+    assert metrics["precision_at_50"] == 0.5
 
 
-def test_relevance_recall_is_invariant_to_cutoff_tie_order() -> None:
-    probabilities = np.array([2.0] * 5 + [1.0] * 10 + [0.0] * 5)
-    labels = np.array(
-        [1, 1, 0, 0, 0] + [1, 1, 1, 1, 0, 0, 0, 0, 0, 0] + [1, 1, 0, 0, 0]
-    )
-    reordered_labels = np.array(
-        [1, 1, 0, 0, 0] + [0, 0, 0, 0, 0, 0, 1, 1, 1, 1] + [1, 1, 0, 0, 0]
-    )
+def test_relevance_precision_is_invariant_to_cutoff_tie_order() -> None:
+    probabilities = np.array([2.0] * 45 + [1.0] * 10 + [0.0] * 5)
+    labels = np.array([1] * 40 + [0] * 5 + [1] * 4 + [0] * 6 + [1] * 5)
+    reordered_labels = np.array([1] * 40 + [0] * 5 + [0] * 6 + [1] * 4 + [1] * 5)
 
     metrics = eval_models.compute_relevance_metrics(labels, probabilities)
     reordered_metrics = eval_models.compute_relevance_metrics(
         reordered_labels, probabilities
     )
 
-    assert metrics["recall_at_10"] == pytest.approx(0.5)
-    assert reordered_metrics["recall_at_10"] == metrics["recall_at_10"]
+    assert metrics["precision_at_50"] == pytest.approx(0.84)
+    assert reordered_metrics["precision_at_50"] == metrics["precision_at_50"]
 
 
-def test_relevance_metrics_are_nullable_without_positives() -> None:
+def test_relevance_metrics_are_nullable_without_candidates() -> None:
+    metrics = eval_models.compute_relevance_metrics(np.array([]), np.array([]))
+
+    assert metrics == {
+        "roc_auc": None,
+        "average_precision": None,
+        "precision_at_50": None,
+    }
+
+
+def test_relevance_metrics_without_positives_do_not_use_nan() -> None:
     metrics = eval_models.compute_relevance_metrics(
         np.zeros(60, dtype=int), np.arange(60, dtype=float)
     )
@@ -79,9 +73,7 @@ def test_relevance_metrics_are_nullable_without_positives() -> None:
     assert metrics == {
         "roc_auc": None,
         "average_precision": None,
-        "recall_at_10": None,
-        "recall_at_25": None,
-        "recall_at_50": None,
+        "precision_at_50": 0.0,
     }
 
 
@@ -90,24 +82,11 @@ def test_relevance_metrics_for_all_positive_labels() -> None:
         np.ones(60, dtype=int), np.arange(60, dtype=float)
     )
 
-    assert metrics["roc_auc"] is None
-    assert metrics["average_precision"] == 1.0
-    assert metrics["recall_at_10"] == pytest.approx(1 / 6)
-    assert metrics["recall_at_25"] == pytest.approx(5 / 12)
-    assert metrics["recall_at_50"] == pytest.approx(5 / 6)
-
-
-def test_relevance_recall_budgets_measure_distinct_cutoffs() -> None:
-    labels = np.array(
-        [1] * 5 + [0] * 5 + [1] * 10 + [0] * 5 + [1] * 10 + [0] * 15 + [1] * 5 + [0] * 5
-    )
-    metrics = eval_models.compute_relevance_metrics(
-        labels, np.arange(60, 0, -1, dtype=float)
-    )
-
-    assert metrics["recall_at_10"] == pytest.approx(1 / 6)
-    assert metrics["recall_at_25"] == pytest.approx(0.5)
-    assert metrics["recall_at_50"] == pytest.approx(5 / 6)
+    assert metrics == {
+        "roc_auc": None,
+        "average_precision": 1.0,
+        "precision_at_50": 1.0,
+    }
 
 
 def test_perfect_freshness_metrics() -> None:
@@ -229,7 +208,7 @@ def test_freshness_eval_uses_newest_rows_for_holdout(
 def test_evaluation_model_label_identifies_each_prompted_head() -> None:
     assert (
         eval_models.evaluation_model_label("Relevance")
-        == "EmbeddingGemma 300M prompted + MLP"
+        == "EmbeddingGemma 300M prompted + MLP (AP + Precision@50)"
     )
     assert (
         eval_models.evaluation_model_label("Urgency")
@@ -259,8 +238,14 @@ def test_save_eval_results_persists_evaluation_model(
     )
 
     record = history_path.read_text()
-    assert '"evaluation_model": "EmbeddingGemma 300M prompted + MLP"' in record
-    assert captured["evaluation_model"] == "EmbeddingGemma 300M prompted + MLP"
+    assert (
+        '"evaluation_model": "EmbeddingGemma 300M prompted + MLP (AP + Precision@50)"'
+        in record
+    )
+    assert (
+        captured["evaluation_model"]
+        == "EmbeddingGemma 300M prompted + MLP (AP + Precision@50)"
+    )
 
 
 def test_insert_model_eval_maps_nullable_model_specific_metrics(
@@ -325,23 +310,21 @@ def test_insert_model_eval_maps_nullable_model_specific_metrics(
             {
                 "roc_auc": 0.5,
                 "average_precision": 0.6,
-                "recall_at_10": 0.7,
-                "recall_at_25": 0.8,
-                "recall_at_50": 0.9,
+                "precision_at_50": 0.94,
             },
         )
     )
 
     assert captured["metrics_accuracy"] is None
-    assert captured["metrics_precision"] is None
+    assert captured["metrics_precision"] == 0.94
     assert captured["metrics_recall"] is None
     assert captured["metrics_f1"] is None
     assert captured["metrics_roc_auc"] == 0.5
     assert captured["metrics_average_precision"] == 0.6
     assert captured["metrics_log_loss"] is None
-    assert captured["metrics_recall_at_10"] == 0.7
-    assert captured["metrics_recall_at_25"] == 0.8
-    assert captured["metrics_recall_at_50"] == 0.9
+    assert captured["metrics_recall_at_10"] is None
+    assert captured["metrics_recall_at_25"] is None
+    assert captured["metrics_recall_at_50"] is None
     assert captured["metrics_rps"] is None
     assert captured["metrics_weighted_kappa"] is None
     assert captured["metrics_log_duration_mae"] is None

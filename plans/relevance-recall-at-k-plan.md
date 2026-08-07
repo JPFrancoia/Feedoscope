@@ -1,116 +1,100 @@
-# Plan: replace F1 with recall@k in the weekly relevance evaluation
+# Plan: replace threshold relevance metrics with ranking metrics
 
-Status: completed 2026-08-07.
+Status: approved. Precision@50 pivot started 2026-08-07.
 
 ## Brief
 
-The weekly evaluation reports an F1 score for relevance at a fixed 0.5
-threshold. The relevance pipeline never applies a threshold. It ranks articles.
-The F1 score therefore measures a decision that the product does not make. The
-number lost its trend when the head changed to an MLP, because the MLP is not
-calibrated. This plan replaces F1 with recall@k, which measures the ranked feed
-that the reader sees.
+The weekly relevance evaluation must measure the ranked feed. Average precision
+measures the complete ranking. Precision@50 measures the quality of the first
+50 results.
+
+The first rollout used Recall@10/25/50. On a holdout with a fixed 150 positive
+rows, Recall@k is only Precision@k multiplied by `k / 150`. It gave no new
+information and made strong results look weak. Replace it with Precision@50.
 
 ## Current state
 
-`feedoscope/eval_models.py` computes the relevance metrics in
-`compute_and_log_metrics()`. That function applies `pred_labels =
-(predicted_probs >= 0.5)` and then reports accuracy, precision, recall, and F1.
-It also reports ROC AUC, average precision, and log loss, which need no
-threshold.
+`eval_relevance()` ranks a balanced holdout with 150 good and 150 bad articles.
+The first ranking-metric run produced:
 
-`eval_relevance()` builds the holdout. It reads every good and bad article. It
-then samples `VALIDATION_SIZE` rows from each class. The holdout is balanced.
-The production feed is not balanced.
+- average precision 0.9334
+- ROC AUC 0.9456
+- Recall@10 0.0667
+- Recall@25 0.1667
+- Recall@50 0.3133
 
-The `model_evals` table already holds `metrics_recall_at_10`,
-`metrics_recall_at_25`, and `metrics_recall_at_50`. The old super-important
-evaluation wrote them. Nothing writes them now. The columns are free to reuse.
+These recall values mean that the first 10 contained 10 good articles, the first
+25 contained 25, and the first 50 contained 47. Precision@50 expresses the last
+result directly as `47 / 50 = 0.94`.
 
-The removed `compute_super_important_ranking_metrics()` function held a working
-recall@k implementation. Commit `de69041` is the last commit that contains it.
+The `model_evals.metrics_precision` column can store Precision@50 for new
+Relevance rows. Historical Relevance rows used this column for precision at the
+old 0.5 threshold. New rows use an explicit evaluation-model label for the
+Precision@50 metric contract. No schema change is necessary.
 
 ## Proposed implementation
 
-Add recall@k to the relevance metrics. Remove F1, accuracy, and precision at
-the fixed threshold.
-
-For a ranked list of holdout articles, recall@k is the count of positive rows
-inside the top k, divided by the count of all positive rows.
-
-Use k values 10, 25, and 50. The holdout has 300 candidates when
-`VALIDATION_SIZE=150`, so these values measure coverage near the top of the
-ranking. The existing `eval` JSON counts record the candidate pool size. No
-schema change is necessary.
-
-Keep the existing classification metrics for Urgency. For Relevance, stop
-writing accuracy, precision, threshold recall, F1, and log loss. Keep average
-precision and ROC AUC. Add Recall@10, Recall@25, and Recall@50.
+1. Keep average precision and ROC AUC for Relevance.
+2. Replace Recall@10/25/50 with tie-aware Precision@50.
+3. Give proportional credit when a score tie crosses position 50.
+4. Store Precision@50 in `metrics_precision` and leave the recall columns empty.
+5. Keep Urgency classification metrics unchanged.
+6. Show average precision and Precision@50 in the Miniflux Relevance section.
+7. Use the evaluation-model label to identify new Precision@50 rows.
+8. Show `-` for Precision@50 on historical threshold-based rows.
 
 ## File-by-file impact
 
 | Path | Change |
 |---|---|
-| `feedoscope/eval_models.py` | add relevance ranking metrics without changing Urgency metrics |
-| `tests/test_eval_models.py` | cover Recall@10/25/50 and persistence mapping |
-| Miniflux `internal/ui/ai_metrics.go` | mark Relevance views and emit ranking chart data |
-| Miniflux `internal/template/templates/views/ai_metrics.html` | show average precision and Recall@10/25/50 for Relevance |
-| Miniflux `internal/ui/static/js/app.js` | select the Relevance chart series |
-| Miniflux focused tests | cover Relevance mapping, chart data, and chart series |
+| `feedoscope/eval_models.py` | calculate average precision, ROC AUC, and Precision@50 |
+| `feedoscope/data_registry/data_registry.py` | map `precision_at_50` to the existing precision column |
+| `tests/test_eval_models.py` | cover ties, edge cases, and persistence mapping |
+| Miniflux `internal/ui/ai_metrics.go` | map Precision@50 without relabeling historical precision |
+| Miniflux `internal/template/templates/views/ai_metrics.html` | show average precision and Precision@50 |
+| Miniflux `internal/ui/static/js/app.js` | chart the two Relevance metrics |
+| Miniflux focused tests | cover historical gaps and chart series |
+| Workspace reference docs | document the final metric contract |
 
 ## Risks and edge cases
 
-- The holdout is balanced 1:1. The production feed is not. Absolute Recall@k
-  values do not represent production prevalence. The weekly trend remains useful.
-- Values of k are less than the current positive count and candidate count.
-  The metric still clamps k to the candidate count.
-- When the holdout holds no positive rows, the metric divides by zero. Return
-  `None` for that row.
-- The `metrics_f1` column keeps its history. A break in the series must stay
-  visible. Do not backfill.
+- The holdout is balanced. Precision@50 does not estimate production precision
+  when production class prevalence differs.
+- Precision@50 can saturate. If it stays near 1.0, evaluate Precision@100 before
+  adding another persistent metric.
+- A score tie can cross position 50. Proportional credit removes input-order
+  bias.
+- Historical `metrics_precision` values have different semantics. Miniflux uses
+  the explicit evaluation-model label to identify Precision@50 rows.
 
 ## Validation
 
-- Unit test: a perfect ranking gives recall@k of 1.0 at k equal to the positive
-  count.
-- Unit test: a reversed ranking gives a lower value than the correct ranking.
-- Unit test: k larger than the candidate count does not raise an error.
-- Miniflux tests: Relevance uses average precision and Recall@10/25/50.
-- Run one weekly evaluation and compare Recall@k with average precision.
+- A perfect top 50 gives Precision@50 of 1.0.
+- A ranking with 47 good articles in the top 50 gives 0.94.
+- Reordering articles inside a cutoff tie does not change the result.
+- Single-class inputs do not produce NaN values.
+- Urgency keeps its existing metric mapping and display.
+- Historical Relevance rows show `-` for Precision@50.
 
 ## Step-by-step checklist
 
-- [x] Confirm k values 10, 25, and 50.
-- [x] Add relevance ranking metrics to `eval_models.py`.
-- [x] Add Feedoscope unit tests.
-- [x] Update the Miniflux Relevance section and tests.
-- [x] Run Feedoscope checks.
-- [x] Run Miniflux checks.
-- [x] Update `docs/reference/relevance-ranking.md` with the new metric set.
+- [x] Approve Precision@50 and remove Recall@k.
+- [x] Update Feedoscope metrics and tests.
+- [x] Update Miniflux display and tests.
+- [x] Update reference documentation.
+- [ ] Run repository checks.
+- [ ] Deploy the evaluator and UI.
+- [ ] Run and record a new production evaluation.
 
-## Open questions
+## Decisions
 
-1. **Should the holdout match the production class balance?** A balanced
-   holdout inflates recall@k. An imbalanced holdout needs more rows for a
-   stable measurement. This question is not urgent.
+- Average precision remains the primary relevance metric.
+- Precision@50 is the only top-list metric.
+- Precision@10 and Precision@25 are omitted because both saturated at 1.0.
+- ROC AUC remains a secondary stored metric.
+- No migration or new database column is necessary.
 
-## Assumptions
+## Feedoscope validation
 
-- The positive label stays `read and vote >= 0`, the same target that the MLP
-  trains on.
-- `VALIDATION_SIZE` stays at 150 during this work.
-- Historical threshold metrics stay in their database columns. New Relevance
-  rows leave those columns empty.
-
-## Completion evidence
-
-- Feedoscope: 88 tests passed. Mypy, Black, isort, and the diff check passed.
-- Miniflux: `go test ./internal/ui` passed. Six JavaScript tests passed.
-- Recall@k gives proportional credit when a score tie crosses k. Input order
-  does not change the result.
-- Historical Relevance rows show `-` for missing Recall@k values.
-- No schema migration or new database column was necessary.
-- Production evaluation job `feedoscope-eval-recall-e796b76` completed on
-  2026-08-07 with 150 good and 150 bad holdout articles.
-- The stored metrics are average precision 0.9334, ROC AUC 0.9456,
-  Recall@10 0.0667, Recall@25 0.1667, and Recall@50 0.3133.
+- 88 tests passed with five existing dependency warnings.
+- Mypy, Black, isort, and the diff check passed.

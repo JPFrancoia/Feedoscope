@@ -379,7 +379,9 @@ async def insert_model_eval(
                 "training": Jsonb(training_counts),
                 "eval_counts": Jsonb(eval_counts),
                 "metrics_accuracy": metrics.get("accuracy"),
-                "metrics_precision": metrics.get("precision"),
+                "metrics_precision": metrics.get(
+                    "precision", metrics.get("precision_at_50")
+                ),
                 "metrics_recall": metrics.get("recall"),
                 "metrics_f1": metrics.get("f1", metrics.get("macro_f1")),
                 "metrics_roc_auc": metrics.get(
