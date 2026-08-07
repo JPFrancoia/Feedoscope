@@ -1,6 +1,6 @@
 # Plan: replace threshold relevance metrics with ranking metrics
 
-Status: approved. Precision@50 pivot started 2026-08-07.
+Status: completed 2026-08-07.
 
 ## Brief
 
@@ -82,9 +82,9 @@ Precision@50 metric contract. No schema change is necessary.
 - [x] Update Feedoscope metrics and tests.
 - [x] Update Miniflux display and tests.
 - [x] Update reference documentation.
-- [ ] Run repository checks.
-- [ ] Deploy the evaluator and UI.
-- [ ] Run and record a new production evaluation.
+- [x] Run repository checks.
+- [x] Deploy the evaluator and UI.
+- [x] Run and record a new production evaluation.
 
 ## Decisions
 
@@ -93,6 +93,17 @@ Precision@50 metric contract. No schema change is necessary.
 - Precision@10 and Precision@25 are omitted because both saturated at 1.0.
 - ROC AUC remains a secondary stored metric.
 - No migration or new database column is necessary.
+
+## Completion evidence
+
+- Feedoscope: 88 tests passed. Mypy, Black, isort, and the diff check passed.
+- Miniflux: UI and template tests passed. Six JavaScript tests passed.
+- Images `feedoscope:ce4fb02` and `miniflux:b46f4252` are deployed.
+- Production job `feedoscope-eval-precision50-ce4fb02` completed with 150 good
+  and 150 bad holdout articles.
+- The stored metrics are average precision 0.9334, ROC AUC 0.9456, and
+  Precision@50 0.9400.
+- The stored Recall@k and F1 values are null for the new Relevance row.
 
 ## Feedoscope validation
 
