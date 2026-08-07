@@ -1,6 +1,6 @@
 # Plan: replace F1 with recall@k in the weekly relevance evaluation
 
-Status: open. Waiting for user input. Created 2026-08-07.
+Status: completed 2026-08-07.
 
 ## Brief
 
@@ -38,28 +38,32 @@ the fixed threshold.
 For a ranked list of holdout articles, recall@k is the count of positive rows
 inside the top k, divided by the count of all positive rows.
 
-Record the candidate count with every metric row. Recall@k depends on the size
-of the candidate pool. Recall@10 over 50 candidates and recall@10 over 500
-candidates are different numbers. Without the count, a later change to
-`VALIDATION_SIZE` breaks the series without a visible cause. This failure mode
-is the same one that F1 just showed.
+Use k values 10, 25, and 50. The holdout has 300 candidates when
+`VALIDATION_SIZE=150`, so these values measure coverage near the top of the
+ranking. The existing `eval` JSON counts record the candidate pool size. No
+schema change is necessary.
+
+Keep the existing classification metrics for Urgency. For Relevance, stop
+writing accuracy, precision, threshold recall, F1, and log loss. Keep average
+precision and ROC AUC. Add Recall@10, Recall@25, and Recall@50.
 
 ## File-by-file impact
 
 | Path | Change |
 |---|---|
-| `feedoscope/eval_models.py` | add recall@k to `compute_and_log_metrics()`, drop the 0.5 threshold metrics |
-| `feedoscope/data_registry/data_registry.py` | map the new keys in `insert_model_eval()` |
-| `feedoscope/data_registry/sql/insert_model_eval.sql` | add a candidate-count column |
-| `db/migrations/000009_*` | add the candidate-count column |
-| `tests/test_eval_models.py` | cover recall@k and the candidate count |
+| `feedoscope/eval_models.py` | add relevance ranking metrics without changing Urgency metrics |
+| `tests/test_eval_models.py` | cover Recall@10/25/50 and persistence mapping |
+| Miniflux `internal/ui/ai_metrics.go` | mark Relevance views and emit ranking chart data |
+| Miniflux `internal/template/templates/views/ai_metrics.html` | show average precision and Recall@10/25/50 for Relevance |
+| Miniflux `internal/ui/static/js/app.js` | select the Relevance chart series |
+| Miniflux focused tests | cover Relevance mapping, chart data, and chart series |
 
 ## Risks and edge cases
 
-- The holdout is balanced 1:1. The production feed is not. Absolute recall@k
-  values are optimistic. The trend across weeks is still valid.
-- When k is more than the number of candidates, the metric saturates at 1.0.
-  Clamp k to the candidate count, as the old code did.
+- The holdout is balanced 1:1. The production feed is not. Absolute Recall@k
+  values do not represent production prevalence. The weekly trend remains useful.
+- Values of k are less than the current positive count and candidate count.
+  The metric still clamps k to the candidate count.
 - When the holdout holds no positive rows, the metric divides by zero. Return
   `None` for that row.
 - The `metrics_f1` column keeps its history. A break in the series must stay
@@ -71,36 +75,22 @@ is the same one that F1 just showed.
   count.
 - Unit test: a reversed ranking gives a lower value than the correct ranking.
 - Unit test: k larger than the candidate count does not raise an error.
-- Run one weekly evaluation and compare the new metric against the average
-  precision for the same run.
+- Miniflux tests: Relevance uses average precision and Recall@10/25/50.
+- Run one weekly evaluation and compare Recall@k with average precision.
 
 ## Step-by-step checklist
 
-- [ ] Confirm the k values with the user.
-- [ ] Add `recall_at_k()` to `eval_models.py`.
-- [ ] Add the candidate count to the metric row.
-- [ ] Write the migration for the candidate-count column.
-- [ ] Update `insert_model_eval()` and its SQL file.
-- [ ] Add the unit tests.
-- [ ] Run `make lint` and `make format`.
-- [ ] Update `docs/relevance-ranking.md` with the new metric set.
+- [x] Confirm k values 10, 25, and 50.
+- [x] Add relevance ranking metrics to `eval_models.py`.
+- [x] Add Feedoscope unit tests.
+- [x] Update the Miniflux Relevance section and tests.
+- [x] Run Feedoscope checks.
+- [x] Run Miniflux checks.
+- [x] Update `docs/reference/relevance-ranking.md` with the new metric set.
 
 ## Open questions
 
-1. **Which k values?** The old code used 10, 25, and 50. The correct values
-   depend on how far down the feed the reader goes in one session. This
-   question is open. It blocks the first checklist item.
-
-2. **Keep F1 or remove it?** Three options exist:
-   - Remove F1. Recall@k measures the ranked product. This option is the
-     recommendation.
-   - Keep F1 and pick its threshold on the training folds instead of the fixed
-     0.5. This option keeps a comparable threshold metric. It costs about five
-     lines.
-   - Keep F1 unchanged and add a note that the series broke at commit
-     `6ca9e7d`.
-
-3. **Should the holdout match the production class balance?** A balanced
+1. **Should the holdout match the production class balance?** A balanced
    holdout inflates recall@k. An imbalanced holdout needs more rows for a
    stable measurement. This question is not urgent.
 
@@ -108,4 +98,15 @@ is the same one that F1 just showed.
 
 - The positive label stays `read and vote >= 0`, the same target that the MLP
   trains on.
-- `VALIDATION_SIZE` does not change during this work.
+- `VALIDATION_SIZE` stays at 150 during this work.
+- Historical threshold metrics stay in their database columns. New Relevance
+  rows leave those columns empty.
+
+## Completion evidence
+
+- Feedoscope: 88 tests passed. Mypy, Black, isort, and the diff check passed.
+- Miniflux: `go test ./internal/ui` passed. Six JavaScript tests passed.
+- Recall@k gives proportional credit when a score tie crosses k. Input order
+  does not change the result.
+- Historical Relevance rows show `-` for missing Recall@k values.
+- No schema migration or new database column was necessary.

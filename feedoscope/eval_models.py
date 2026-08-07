@@ -59,6 +59,7 @@ EVAL_URGENCY_PREFIX = "eval_urgency"
 MAX_LENGTH = 512
 INFERENCE_BATCH_SIZE = 128
 EVAL_HISTORY_PATH = "models/eval_history.json"
+RELEVANCE_RANKING_BUDGETS = (10, 25, 50)
 
 
 def _clean_stale_eval_dirs() -> None:
@@ -129,6 +130,44 @@ def compute_freshness_metrics(
         ),
         "long_lived_auc": long_lived_auc,
     }
+
+
+def compute_relevance_metrics(
+    true_labels: np.ndarray,
+    predicted_probs: np.ndarray,
+) -> dict[str, float | None]:
+    """Compute metrics for the ranked relevance holdout."""
+    true_labels = np.asarray(true_labels, dtype=int)
+    predicted_probs = np.asarray(predicted_probs, dtype=float)
+    positive_count = int(true_labels.sum())
+
+    metrics: dict[str, float | None] = {
+        "roc_auc": (
+            float(roc_auc_score(true_labels, predicted_probs))
+            if np.unique(true_labels).size == 2
+            else None
+        ),
+        "average_precision": (
+            float(average_precision_score(true_labels, predicted_probs))
+            if positive_count
+            else None
+        ),
+    }
+    for budget in RELEVANCE_RANKING_BUDGETS:
+        effective_budget = min(budget, len(true_labels))
+        if not positive_count or not effective_budget:
+            metrics[f"recall_at_{budget}"] = None
+            continue
+
+        cutoff = np.partition(predicted_probs, -effective_budget)[-effective_budget]
+        above_cutoff = predicted_probs > cutoff
+        at_cutoff = predicted_probs == cutoff
+        available_slots = effective_budget - int(above_cutoff.sum())
+        credited_positives = true_labels[above_cutoff].sum() + (
+            true_labels[at_cutoff].sum() * available_slots / at_cutoff.sum()
+        )
+        metrics[f"recall_at_{budget}"] = float(credited_positives / positive_count)
+    return metrics
 
 
 def compute_and_log_metrics(
@@ -361,7 +400,17 @@ async def eval_relevance(device: torch.device) -> None:
             [np.ones(len(good_probs)), np.zeros(len(bad_probs))]
         )
 
-        metrics = compute_and_log_metrics("Relevance", true_labels, all_probs)
+        metrics = compute_relevance_metrics(true_labels, all_probs)
+        average_precision = metrics["average_precision"]
+        roc_auc = metrics["roc_auc"]
+        assert average_precision is not None and roc_auc is not None
+        logger.info("[Relevance] Evaluation results:")
+        logger.info(f"[Relevance]   Average Precision: {average_precision:.4f}")
+        logger.info(f"[Relevance]   ROC AUC:           {roc_auc:.4f}")
+        for budget in RELEVANCE_RANKING_BUDGETS:
+            recall = metrics[f"recall_at_{budget}"]
+            if recall is not None:
+                logger.info(f"[Relevance]   Recall@{budget}:         {recall:.4f}")
 
         await save_eval_results(
             model_name="Relevance",

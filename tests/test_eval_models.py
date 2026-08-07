@@ -10,6 +10,106 @@ from feedoscope import eval_models
 from feedoscope.data_registry import data_registry as dr
 
 
+def test_perfect_relevance_ranking_metrics() -> None:
+    labels = np.array([1] * 10 + [0] * 10)
+    probabilities = np.arange(20, 0, -1, dtype=float)
+
+    metrics = eval_models.compute_relevance_metrics(labels, probabilities)
+
+    assert metrics["roc_auc"] == 1.0
+    assert metrics["average_precision"] == pytest.approx(1.0)
+    assert metrics["recall_at_10"] == 1.0
+    assert metrics["recall_at_25"] == 1.0
+    assert metrics["recall_at_50"] == 1.0
+
+
+def test_reversed_relevance_ranking_has_lower_top_recall() -> None:
+    labels = np.array([1] * 10 + [0] * 10)
+    perfect = eval_models.compute_relevance_metrics(
+        labels, np.arange(20, 0, -1, dtype=float)
+    )
+    reversed_ranking = eval_models.compute_relevance_metrics(
+        labels, np.arange(1, 21, dtype=float)
+    )
+
+    reversed_recall = reversed_ranking["recall_at_10"]
+    perfect_recall = perfect["recall_at_10"]
+    reversed_ap = reversed_ranking["average_precision"]
+    perfect_ap = perfect["average_precision"]
+    assert reversed_recall is not None and perfect_recall is not None
+    assert reversed_ap is not None and perfect_ap is not None
+    assert reversed_recall < perfect_recall
+    assert reversed_ap < perfect_ap
+
+
+def test_relevance_recall_clamps_k_to_candidate_count() -> None:
+    metrics = eval_models.compute_relevance_metrics(
+        np.array([1, 0, 1, 0]),
+        np.array([0.9, 0.8, 0.7, 0.6]),
+    )
+
+    assert metrics["recall_at_10"] == 1.0
+    assert metrics["recall_at_25"] == 1.0
+    assert metrics["recall_at_50"] == 1.0
+
+
+def test_relevance_recall_is_invariant_to_cutoff_tie_order() -> None:
+    probabilities = np.array([2.0] * 5 + [1.0] * 10 + [0.0] * 5)
+    labels = np.array(
+        [1, 1, 0, 0, 0] + [1, 1, 1, 1, 0, 0, 0, 0, 0, 0] + [1, 1, 0, 0, 0]
+    )
+    reordered_labels = np.array(
+        [1, 1, 0, 0, 0] + [0, 0, 0, 0, 0, 0, 1, 1, 1, 1] + [1, 1, 0, 0, 0]
+    )
+
+    metrics = eval_models.compute_relevance_metrics(labels, probabilities)
+    reordered_metrics = eval_models.compute_relevance_metrics(
+        reordered_labels, probabilities
+    )
+
+    assert metrics["recall_at_10"] == pytest.approx(0.5)
+    assert reordered_metrics["recall_at_10"] == metrics["recall_at_10"]
+
+
+def test_relevance_metrics_are_nullable_without_positives() -> None:
+    metrics = eval_models.compute_relevance_metrics(
+        np.zeros(60, dtype=int), np.arange(60, dtype=float)
+    )
+
+    assert metrics == {
+        "roc_auc": None,
+        "average_precision": None,
+        "recall_at_10": None,
+        "recall_at_25": None,
+        "recall_at_50": None,
+    }
+
+
+def test_relevance_metrics_for_all_positive_labels() -> None:
+    metrics = eval_models.compute_relevance_metrics(
+        np.ones(60, dtype=int), np.arange(60, dtype=float)
+    )
+
+    assert metrics["roc_auc"] is None
+    assert metrics["average_precision"] == 1.0
+    assert metrics["recall_at_10"] == pytest.approx(1 / 6)
+    assert metrics["recall_at_25"] == pytest.approx(5 / 12)
+    assert metrics["recall_at_50"] == pytest.approx(5 / 6)
+
+
+def test_relevance_recall_budgets_measure_distinct_cutoffs() -> None:
+    labels = np.array(
+        [1] * 5 + [0] * 5 + [1] * 10 + [0] * 5 + [1] * 10 + [0] * 15 + [1] * 5 + [0] * 5
+    )
+    metrics = eval_models.compute_relevance_metrics(
+        labels, np.arange(60, 0, -1, dtype=float)
+    )
+
+    assert metrics["recall_at_10"] == pytest.approx(1 / 6)
+    assert metrics["recall_at_25"] == pytest.approx(0.5)
+    assert metrics["recall_at_50"] == pytest.approx(5 / 6)
+
+
 def test_perfect_freshness_metrics() -> None:
     metrics = eval_models.compute_freshness_metrics(np.arange(3), np.eye(3))
 
@@ -223,24 +323,25 @@ def test_insert_model_eval_maps_nullable_model_specific_metrics(
             {"good": 1},
             {"bad": 1},
             {
-                "accuracy": 0.1,
-                "precision": 0.2,
-                "recall": 0.3,
-                "f1": 0.4,
                 "roc_auc": 0.5,
                 "average_precision": 0.6,
-                "log_loss": 0.7,
+                "recall_at_10": 0.7,
+                "recall_at_25": 0.8,
+                "recall_at_50": 0.9,
             },
         )
     )
 
-    assert captured["metrics_accuracy"] == 0.1
-    assert captured["metrics_precision"] == 0.2
-    assert captured["metrics_recall"] == 0.3
-    assert captured["metrics_f1"] == 0.4
+    assert captured["metrics_accuracy"] is None
+    assert captured["metrics_precision"] is None
+    assert captured["metrics_recall"] is None
+    assert captured["metrics_f1"] is None
     assert captured["metrics_roc_auc"] == 0.5
     assert captured["metrics_average_precision"] == 0.6
-    assert captured["metrics_log_loss"] == 0.7
+    assert captured["metrics_log_loss"] is None
+    assert captured["metrics_recall_at_10"] == 0.7
+    assert captured["metrics_recall_at_25"] == 0.8
+    assert captured["metrics_recall_at_50"] == 0.9
     assert captured["metrics_rps"] is None
     assert captured["metrics_weighted_kappa"] is None
     assert captured["metrics_log_duration_mae"] is None
