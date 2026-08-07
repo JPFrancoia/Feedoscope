@@ -59,6 +59,61 @@ def test_explicit_preference_label_uses_star_or_upvote() -> None:
     )
 
 
+def test_relevance_training_weights_important_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(relevance_embedding.config, "IMPORTANT_ARTICLE_WEIGHT", 20.0)
+    articles = [
+        cast(Article, SimpleNamespace(status="read", vote=1, starred=False)),
+        cast(Article, SimpleNamespace(status="read", vote=0, starred=False)),
+        cast(Article, SimpleNamespace(status="unread", vote=-1, starred=False)),
+    ]
+
+    sample_weights = relevance_embedding.build_relevance_sample_weights(articles)
+
+    np.testing.assert_array_equal(sample_weights, [20.0, 1.0, 1.0])
+
+
+def test_relevance_mlp_receives_sample_weights(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, np.ndarray | None] = {}
+
+    class RecordingMLP:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def fit(
+            self,
+            _: np.ndarray,
+            __: np.ndarray,
+            sample_weight: np.ndarray | None = None,
+        ) -> None:
+            captured["sample_weight"] = sample_weight
+
+    sample_weights = np.array([20.0, 1.0])
+    monkeypatch.setattr(relevance_embedding, "MLPClassifier", RecordingMLP)
+
+    relevance_embedding.fit_classifier(
+        np.array([[1.0], [2.0]]),
+        np.array([1, 0]),
+        sample_weights=sample_weights,
+    )
+
+    assert captured["sample_weight"] is not None
+    np.testing.assert_array_equal(captured["sample_weight"], sample_weights)
+
+
+def test_model_family_changes_with_important_article_weight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = relevance_embedding.get_model_family_prefix()
+
+    monkeypatch.setattr(relevance_embedding.config, "IMPORTANT_ARTICLE_WEIGHT", 7)
+
+    assert relevance_embedding.get_model_family_prefix() != original
+
+
 def test_combined_score_applies_bonus_only_above_decision_threshold() -> None:
     relevance = np.array([0.95, 0.6, 0.7, 0.7, 0.7])
     preference = np.array([0.2, 0.3, 0.5, 0.6, 1.0])
@@ -103,7 +158,12 @@ def test_two_head_artifact_round_trip_and_rejects_old_shape(tmp_path: Path) -> N
         str(tmp_path),
         relevance_classifier,
         super_important_classifier,
-        {"good": 2, "bad": 2, "super_important": 1, "ordinary_read": 1},
+        {
+            "good": 2,
+            "bad": 2,
+            "super_important": 1,
+            "ordinary_read": 1,
+        },
     )
 
     loaded_relevance, loaded_super_important = (

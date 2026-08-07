@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 CLASSIFIER_FILENAME = "classifier.joblib"
 METADATA_FILENAME = "metadata.json"
 TWO_HEAD_ARTIFACT_FILENAME = "relevance_two_head_mlp.joblib"
-TWO_HEAD_ARTIFACT_VERSION = 2
+TWO_HEAD_ARTIFACT_VERSION = 3
 TWO_HEAD_BACKEND = "embedding_prompted_mlp_two_head"
 TWO_HEAD_LABEL_CONTRACT = {
     "relevance_positive": "read and vote >= 0",
@@ -78,7 +78,8 @@ def get_model_family_prefix() -> str:
         f"relevance_two_head_{config.RELEVANCE_EMBEDDING_KEY.replace('/', '-')}_"
         f"{config.RELEVANCE_MAX_LENGTH}_{config.RELEVANCE_TEXT_PREP_MODE}_"
         f"p{config.RELEVANCE_PREP_VERSION}_prompted_mlp_"
-        f"h{config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE}_a{config.RELEVANCE_MLP_ALPHA}"
+        f"h{config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE}_a{config.RELEVANCE_MLP_ALPHA}_"
+        f"iw{config.IMPORTANT_ARTICLE_WEIGHT}"
     )
 
 
@@ -366,6 +367,16 @@ def is_super_important(article: Article) -> bool:
     )
 
 
+def build_relevance_sample_weights(articles: list[Article]) -> np.ndarray:
+    """Return MLP weights that emphasize explicitly preferred articles."""
+    return np.array(
+        [
+            config.IMPORTANT_ARTICLE_WEIGHT if is_super_important(article) else 1.0
+            for article in articles
+        ]
+    )
+
+
 def fit_classifier(
     embeddings: np.ndarray,
     labels: np.ndarray,
@@ -373,8 +384,6 @@ def fit_classifier(
     sample_weights: np.ndarray | None = None,
 ) -> MLPClassifier:
     """Fit the configured prompted-embedding relevance MLP head."""
-    if sample_weights is not None:
-        raise ValueError("The prompted relevance MLP does not use sample weights")
     pipeline_name = _pipeline_name(pipeline_label)
     logger.info(
         f"Fitting {pipeline_name} MLP on {len(labels)} rows with "
@@ -387,7 +396,11 @@ def fit_classifier(
         max_iter=config.RELEVANCE_MLP_MAX_ITER,
         random_state=42,
     )
-    classifier.fit(embeddings, labels)
+    classifier.fit(  # type: ignore[call-arg]  # sklearn-stubs omit sklearn 1.7 support
+        embeddings,
+        labels,
+        sample_weight=sample_weights,
+    )
     logger.info(f"{_pipeline_title(pipeline_label)} MLP fit completed")
     return classifier
 
@@ -420,6 +433,7 @@ def build_two_head_metadata(
         "mlp_hidden_layer_size": config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE,
         "mlp_alpha": config.RELEVANCE_MLP_ALPHA,
         "mlp_max_iter": config.RELEVANCE_MLP_MAX_ITER,
+        "important_article_weight": config.IMPORTANT_ARTICLE_WEIGHT,
         "super_important_linear_c": config.RELEVANCE_LINEAR_C,
         "label_contract": TWO_HEAD_LABEL_CONTRACT,
         "train_counts": train_counts,
@@ -475,6 +489,7 @@ def load_two_head_artifact(
         != config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE
         or metadata.get("mlp_alpha") != config.RELEVANCE_MLP_ALPHA
         or metadata.get("mlp_max_iter") != config.RELEVANCE_MLP_MAX_ITER
+        or metadata.get("important_article_weight") != config.IMPORTANT_ARTICLE_WEIGHT
         or metadata.get("super_important_linear_c") != config.RELEVANCE_LINEAR_C
         or metadata.get("label_contract") != TWO_HEAD_LABEL_CONTRACT
         or not isinstance(train_counts, dict)

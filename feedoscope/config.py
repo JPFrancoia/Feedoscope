@@ -99,6 +99,11 @@ RELEVANCE_MLP_HIDDEN_LAYER_SIZE = int(
 )
 RELEVANCE_MLP_ALPHA = float(os.getenv("RELEVANCE_MLP_ALPHA", "0.0001"))
 RELEVANCE_MLP_MAX_ITER = int(os.getenv("RELEVANCE_MLP_MAX_ITER", "300"))
+# Weight for explicitly important articles during relevance MLP training.
+IMPORTANT_ARTICLE_WEIGHT = float(os.getenv("IMPORTANT_ARTICLE_WEIGHT", "20"))
+assert (
+    math.isfinite(IMPORTANT_ARTICLE_WEIGHT) and IMPORTANT_ARTICLE_WEIGHT >= 1
+), "IMPORTANT_ARTICLE_WEIGHT must be finite and at least 1"
 # Keep this legacy value for old standalone artifact compatibility only.
 RELEVANCE_LINEAR_C = float(os.getenv("RELEVANCE_LINEAR_C", "5.0"))
 

@@ -120,10 +120,18 @@ async def train_model(
         encoder,
         device,
     )
+    relevance_sample_weights = relevance_embedding.build_relevance_sample_weights(
+        training_articles
+    )
+    logger.info(
+        f"Relevance MLP uses {config.IMPORTANT_ARTICLE_WEIGHT}x weights for "
+        f"{super_important_count} important articles."
+    )
     relevance_classifier = relevance_embedding.fit_classifier(
         embeddings,
         relevance_labels,
         pipeline_label="relevance",
+        sample_weights=relevance_sample_weights,
     )
     super_important_classifier = relevance_embedding.fit_logistic_classifier(
         embeddings[: len(good_articles)],
