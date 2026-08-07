@@ -64,6 +64,10 @@ All run commands set `LOGGING_CONFIG=dev_logging.conf` for colored console outpu
 
 Uses golang-migrate CLI (not a Python tool). Migration files in `db/migrations/`.
 
+Use a direct, reviewed SQL command for one-off data cleanup. Do not create a
+migration only to delete data. Create a migration for schema changes or data
+changes that every environment must apply.
+
 ```bash
 make up               # Apply next migration
 make down             # Roll back one migration
