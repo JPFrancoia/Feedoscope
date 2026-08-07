@@ -107,18 +107,6 @@ assert (
 # Keep this legacy value for old standalone artifact compatibility only.
 RELEVANCE_LINEAR_C = float(os.getenv("RELEVANCE_LINEAR_C", "5.0"))
 
-# Enable the preference head during production relevance inference. Training and
-# weekly evaluation remain active when this flag is false.
-SUPER_IMPORTANT_INFERENCE_ENABLED = strtobool(
-    os.getenv("SUPER_IMPORTANT_INFERENCE_ENABLED", "False")
-)
-
-# Fixed preference bonus selected by the chronological ranker benchmark.
-SUPER_IMPORTANT_BONUS = float(os.getenv("SUPER_IMPORTANT_BONUS", "0.0"))
-assert (
-    math.isfinite(SUPER_IMPORTANT_BONUS) and SUPER_IMPORTANT_BONUS >= 0
-), "SUPER_IMPORTANT_BONUS must be finite and nonnegative"
-
 # Inverse regularization strength for the logistic-regression urgency head.
 # Urgency intentionally shares the same embedding config as relevance for cache
 # reuse, but keeps its own classifier regularization.

@@ -5,7 +5,6 @@ import os
 import time
 
 import numpy as np
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     average_precision_score,
     f1_score,
@@ -45,32 +44,6 @@ def compute_metrics(
     }
 
 
-async def predict_combined_probabilities(
-    articles: list[Article],
-    tokenizer: PreTrainedTokenizerBase,
-    encoder: torch.nn.Module,
-    relevance_classifier: MLPClassifier,
-    super_important_classifier: LogisticRegression,
-    device: torch.device,
-) -> np.ndarray:
-    """Score articles with both heads from one cached embedding lookup."""
-    embeddings = await relevance_embedding.encode_articles(
-        articles,
-        tokenizer,
-        encoder,
-        device,
-    )
-    return relevance_embedding.combine_probabilities(
-        relevance_embedding.predict_probabilities_from_embeddings(
-            embeddings, relevance_classifier
-        ),
-        relevance_embedding.predict_probabilities_from_embeddings(
-            embeddings, super_important_classifier
-        ),
-        bonus_strength=config.SUPER_IMPORTANT_BONUS,
-    )
-
-
 def build_model_path(good_articles: list[Article], bad_articles: list[Article]) -> str:
     """Build the on-disk artifact path for a relevance training run."""
     return (
@@ -85,29 +58,17 @@ async def train_model(
     bad_articles: list[Article],
     model_path: str,
     device: torch.device,
-) -> tuple[
-    torch.nn.Module,
-    PreTrainedTokenizerBase,
-    MLPClassifier,
-    LogisticRegression,
-]:
-    """Train relevance and super-important heads from one embedding matrix."""
+) -> tuple[torch.nn.Module, PreTrainedTokenizerBase, MLPClassifier]:
+    """Train the relevance head from one embedding matrix."""
     tokenizer, encoder = relevance_embedding.load_encoder(device)
     training_articles = good_articles + bad_articles
     relevance_labels = np.array([1] * len(good_articles) + [0] * len(bad_articles))
-    super_important_labels = np.array(
-        [relevance_embedding.is_super_important(article) for article in good_articles],
-        dtype=int,
+    important_count = sum(
+        relevance_embedding.is_important(article) for article in good_articles
     )
-    super_important_count = int(super_important_labels.sum())
-    ordinary_read_count = len(good_articles) - super_important_count
-    if not super_important_count or not ordinary_read_count:
-        raise RuntimeError(
-            "Super-important training needs both explicitly preferred and ordinary read articles."
-        )
     logger.info(
-        f"Training heads with {len(good_articles)} good, {len(bad_articles)} bad, "
-        f"{super_important_count} super-important, and {ordinary_read_count} ordinary read articles."
+        f"Training relevance with {len(good_articles)} good, {len(bad_articles)} bad, "
+        f"and {important_count} explicitly preferred articles."
     )
 
     if torch.cuda.is_available():
@@ -125,7 +86,7 @@ async def train_model(
     )
     logger.info(
         f"Relevance MLP uses {config.IMPORTANT_ARTICLE_WEIGHT}x weights for "
-        f"{super_important_count} important articles."
+        f"{important_count} important articles."
     )
     relevance_classifier = relevance_embedding.fit_classifier(
         embeddings,
@@ -133,23 +94,12 @@ async def train_model(
         pipeline_label="relevance",
         sample_weights=relevance_sample_weights,
     )
-    super_important_classifier = relevance_embedding.fit_logistic_classifier(
-        embeddings[: len(good_articles)],
-        super_important_labels,
-        pipeline_label="super-important",
-    )
-    relevance_embedding.save_two_head_artifact(
+    relevance_embedding.save_relevance_artifact(
         model_path,
         relevance_classifier,
-        super_important_classifier,
-        train_counts={
-            "good": len(good_articles),
-            "bad": len(bad_articles),
-            "super_important": super_important_count,
-            "ordinary_read": ordinary_read_count,
-        },
+        train_counts={"good": len(good_articles), "bad": len(bad_articles)},
     )
-    return encoder, tokenizer, relevance_classifier, super_important_classifier
+    return encoder, tokenizer, relevance_classifier
 
 
 async def main() -> None:
@@ -176,28 +126,19 @@ async def main() -> None:
 
     model_path = build_model_path(good_articles, bad_articles)
 
-    if os.path.exists(
-        os.path.join(model_path, relevance_embedding.TWO_HEAD_ARTIFACT_FILENAME)
-    ):
-        logger.info(f"Loading two-head relevance artifact from {model_path}")
+    if os.path.exists(os.path.join(model_path, relevance_embedding.ARTIFACT_FILENAME)):
+        logger.info(f"Loading relevance artifact from {model_path}")
         tokenizer, encoder = relevance_embedding.load_encoder(device)
-        relevance_classifier, super_important_classifier = (
-            relevance_embedding.load_two_head_artifact(model_path)
-        )
+        relevance_classifier = relevance_embedding.load_relevance_artifact(model_path)
     else:
-        logger.info("Training new two-head relevance backend...")
-        (
-            encoder,
-            tokenizer,
-            relevance_classifier,
-            super_important_classifier,
-        ) = await train_model(
+        logger.info("Training new relevance backend...")
+        encoder, tokenizer, relevance_classifier = await train_model(
             good_articles,
             bad_articles,
             model_path,
             device,
         )
-        logger.info(f"Two-head relevance artifact saved to {model_path}")
+        logger.info(f"Relevance artifact saved to {model_path}")
 
     elapsed_time = time.time() - start_time
     logger.info(f"Training completed in {elapsed_time:.2f} seconds.")
@@ -214,20 +155,18 @@ async def main() -> None:
         f"Loaded {len(good_validation)} good and {len(not_good_validation)} not good validation articles"
     )
 
-    good_probs = await predict_combined_probabilities(
+    good_probs = await relevance_embedding.predict_probabilities(
         good_validation,
         tokenizer,
         encoder,
         relevance_classifier,
-        super_important_classifier,
         device,
     )
-    not_good_probs = await predict_combined_probabilities(
+    not_good_probs = await relevance_embedding.predict_probabilities(
         not_good_validation,
         tokenizer,
         encoder,
         relevance_classifier,
-        super_important_classifier,
         device,
     )
 

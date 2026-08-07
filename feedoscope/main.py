@@ -218,8 +218,6 @@ async def main(
             f"Relevance inference completed in {relevance_elapsed:.2f} seconds "
             f"for {len(relevance_scores.article_ids)} articles."
         )
-        if config.SUPER_IMPORTANT_INFERENCE_ENABLED:
-            await dr.register_super_important_inference(relevance_scores)
 
         # Step 5: Fetch the legacy urgency scores only when the rollback backend is active.
         urgency_scores: dict[int, float] = {}

@@ -42,7 +42,6 @@ class RelevanceInferenceResults(BaseModel):
     article_ids: list[int]
     article_titles: list[str]
     scores: list[float]
-    super_important_scores: list[float]
     model_key: str
 
 

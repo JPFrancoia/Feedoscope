@@ -1,5 +1,4 @@
 import hashlib
-import json
 import logging
 import math
 import os
@@ -24,22 +23,14 @@ logger = logging.getLogger(__name__)
 
 CLASSIFIER_FILENAME = "classifier.joblib"
 METADATA_FILENAME = "metadata.json"
-TWO_HEAD_ARTIFACT_FILENAME = "relevance_two_head_mlp.joblib"
-TWO_HEAD_ARTIFACT_VERSION = 3
-TWO_HEAD_BACKEND = "embedding_prompted_mlp_two_head"
-TWO_HEAD_LABEL_CONTRACT = {
+ARTIFACT_FILENAME = "relevance_mlp.joblib"
+ARTIFACT_VERSION = 4
+BACKEND = "embedding_prompted_mlp"
+LABEL_CONTRACT = {
     "relevance_positive": "read and vote >= 0",
     "relevance_negative": "vote = -1",
-    "super_important_positive": "read and (vote = 1 or starred)",
-    "super_important_negative": "read and vote = 0 and not starred",
 }
-TWO_HEAD_TRAIN_COUNT_KEYS = {
-    "good",
-    "bad",
-    "super_important",
-    "ordinary_read",
-}
-SUPER_IMPORTANT_DECISION_THRESHOLD = 0.5
+TRAIN_COUNT_KEYS = {"good", "bad"}
 ENCODER_CACHE_ROOT = Path("models/relevance_encoder")
 ENCODER_READY_FILENAME = ".snapshot_complete"
 
@@ -73,9 +64,9 @@ def get_encoder_cache_path() -> Path:
 
 
 def get_model_family_prefix() -> str:
-    """Return the versioned artifact family for two-head relevance models."""
+    """Return the versioned artifact family for relevance models."""
     return (
-        f"relevance_two_head_{config.RELEVANCE_EMBEDDING_KEY.replace('/', '-')}_"
+        f"relevance_{config.RELEVANCE_EMBEDDING_KEY.replace('/', '-')}_"
         f"{config.RELEVANCE_MAX_LENGTH}_{config.RELEVANCE_TEXT_PREP_MODE}_"
         f"p{config.RELEVANCE_PREP_VERSION}_prompted_mlp_"
         f"h{config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE}_a{config.RELEVANCE_MLP_ALPHA}_"
@@ -358,7 +349,7 @@ def encode_texts(
     return np.concatenate(embeddings, axis=0)
 
 
-def is_super_important(article: Article) -> bool:
+def is_important(article: Article) -> bool:
     """Return whether a read/good article received an explicit preference."""
     return (
         article.status == "read"
@@ -371,7 +362,7 @@ def build_relevance_sample_weights(articles: list[Article]) -> np.ndarray:
     """Return MLP weights that emphasize explicitly preferred articles."""
     return np.array(
         [
-            config.IMPORTANT_ARTICLE_WEIGHT if is_super_important(article) else 1.0
+            config.IMPORTANT_ARTICLE_WEIGHT if is_important(article) else 1.0
             for article in articles
         ]
     )
@@ -405,56 +396,34 @@ def fit_classifier(
     return classifier
 
 
-def fit_logistic_classifier(
-    embeddings: np.ndarray,
-    labels: np.ndarray,
-    pipeline_label: str,
-    sample_weights: np.ndarray | None = None,
-) -> LogisticRegression:
-    """Fit a deterministic logistic head for a non-relevance pipeline."""
-    classifier = LogisticRegression(
-        max_iter=4000,
-        C=config.RELEVANCE_LINEAR_C,
-        random_state=42,
-    )
-    classifier.fit(embeddings, labels, sample_weight=sample_weights)
-    logger.info(f"{_pipeline_title(pipeline_label)} logistic regression fit completed")
-    return classifier
-
-
-def build_two_head_metadata(
-    train_counts: dict[str, int],
-) -> dict[str, object]:
-    """Build metadata that makes two-head relevance artifacts safe to load."""
+def build_metadata(train_counts: dict[str, int]) -> dict[str, object]:
+    """Build metadata that makes relevance artifacts safe to load."""
     return {
-        "artifact_version": TWO_HEAD_ARTIFACT_VERSION,
-        "backend": TWO_HEAD_BACKEND,
+        "artifact_version": ARTIFACT_VERSION,
+        "backend": BACKEND,
         "encoder": get_cache_config(),
         "mlp_hidden_layer_size": config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE,
         "mlp_alpha": config.RELEVANCE_MLP_ALPHA,
         "mlp_max_iter": config.RELEVANCE_MLP_MAX_ITER,
         "important_article_weight": config.IMPORTANT_ARTICLE_WEIGHT,
-        "super_important_linear_c": config.RELEVANCE_LINEAR_C,
-        "label_contract": TWO_HEAD_LABEL_CONTRACT,
+        "label_contract": LABEL_CONTRACT,
         "train_counts": train_counts,
     }
 
 
-def save_two_head_artifact(
+def save_relevance_artifact(
     model_path: str,
     relevance_classifier: MLPClassifier,
-    super_important_classifier: LogisticRegression,
     train_counts: dict[str, int],
 ) -> None:
-    """Persist both relevance heads and compatibility metadata together."""
+    """Persist the relevance head and compatibility metadata together."""
     path = Path(model_path)
     path.mkdir(parents=True, exist_ok=True)
     artifact = {
         "relevance_classifier": relevance_classifier,
-        "super_important_classifier": super_important_classifier,
-        "metadata": build_two_head_metadata(train_counts),
+        "metadata": build_metadata(train_counts),
     }
-    destination = path / TWO_HEAD_ARTIFACT_FILENAME
+    destination = path / ARTIFACT_FILENAME
     with tempfile.NamedTemporaryFile(dir=path, delete=False) as temporary:
         temporary_path = Path(temporary.name)
     try:
@@ -462,95 +431,35 @@ def save_two_head_artifact(
         os.replace(temporary_path, destination)
     finally:
         temporary_path.unlink(missing_ok=True)
-    logger.info(f"Saved two-head relevance artifact to {model_path}")
+    logger.info(f"Saved relevance artifact to {model_path}")
 
 
-def load_two_head_artifact(
-    model_path: str,
-) -> tuple[MLPClassifier, LogisticRegression]:
-    """Load a compatible two-head relevance artifact."""
-    artifact = joblib.load(Path(model_path) / TWO_HEAD_ARTIFACT_FILENAME)
+def load_relevance_artifact(model_path: str) -> MLPClassifier:
+    """Load a compatible relevance artifact."""
+    artifact = joblib.load(Path(model_path) / ARTIFACT_FILENAME)
     if not isinstance(artifact, dict):
-        raise RuntimeError(
-            "Relevance artifact is not compatible with the two-head model."
-        )
+        raise RuntimeError("Relevance artifact is not compatible with this model.")
     relevance_classifier = artifact.get("relevance_classifier")
-    super_important_classifier = artifact.get("super_important_classifier")
     metadata = artifact.get("metadata")
     train_counts = metadata.get("train_counts") if isinstance(metadata, dict) else None
     if (
         not isinstance(relevance_classifier, MLPClassifier)
-        or not isinstance(super_important_classifier, LogisticRegression)
         or not isinstance(metadata, dict)
-        or metadata.get("artifact_version") != TWO_HEAD_ARTIFACT_VERSION
-        or metadata.get("backend") != TWO_HEAD_BACKEND
+        or metadata.get("artifact_version") != ARTIFACT_VERSION
+        or metadata.get("backend") != BACKEND
         or metadata.get("encoder") != get_cache_config()
         or metadata.get("mlp_hidden_layer_size")
         != config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE
         or metadata.get("mlp_alpha") != config.RELEVANCE_MLP_ALPHA
         or metadata.get("mlp_max_iter") != config.RELEVANCE_MLP_MAX_ITER
         or metadata.get("important_article_weight") != config.IMPORTANT_ARTICLE_WEIGHT
-        or metadata.get("super_important_linear_c") != config.RELEVANCE_LINEAR_C
-        or metadata.get("label_contract") != TWO_HEAD_LABEL_CONTRACT
+        or metadata.get("label_contract") != LABEL_CONTRACT
         or not isinstance(train_counts, dict)
-        or set(train_counts) != TWO_HEAD_TRAIN_COUNT_KEYS
+        or set(train_counts) != TRAIN_COUNT_KEYS
         or not all(isinstance(count, int) for count in train_counts.values())
     ):
-        raise RuntimeError(
-            "Relevance artifact is not compatible with the two-head model."
-        )
-    return relevance_classifier, super_important_classifier
-
-
-def combine_probabilities(
-    relevance_probabilities: np.ndarray,
-    super_important_probabilities: np.ndarray,
-    bonus_strength: float,
-) -> np.ndarray:
-    """Apply a bounded preference bonus above the classifier decision threshold."""
-    if relevance_probabilities.shape != super_important_probabilities.shape:
-        raise ValueError("Relevance and super-important probabilities must align.")
-    if not math.isfinite(bonus_strength) or bonus_strength < 0:
-        raise ValueError("bonus_strength must be finite and nonnegative.")
-    preference_signal = np.clip(
-        (super_important_probabilities - SUPER_IMPORTANT_DECISION_THRESHOLD)
-        / (1 - SUPER_IMPORTANT_DECISION_THRESHOLD),
-        0,
-        1,
-    )
-    return (
-        relevance_probabilities
-        * (1 + bonus_strength * preference_signal)
-        / (1 + bonus_strength)
-    )
-
-
-def save_artifact(
-    model_path: str,
-    classifier: LogisticRegression,
-    train_counts: dict[str, int],
-    pipeline_label: str = "relevance",
-) -> None:
-    """Persist the classifier and minimal metadata for later inference."""
-    pipeline_name = _pipeline_name(pipeline_label)
-    logger.info(f"Saving {pipeline_name} artifact to {model_path}")
-    path = Path(model_path)
-    path.mkdir(parents=True, exist_ok=True)
-
-    joblib.dump(classifier, path / CLASSIFIER_FILENAME)
-    metadata = {
-        "backend": "embedding_linear",
-        "model_name": config.RELEVANCE_MODEL_NAME,
-        "encoder_cache_path": str(get_encoder_cache_path()),
-        "max_length": config.RELEVANCE_MAX_LENGTH,
-        "text_prep_mode": config.RELEVANCE_TEXT_PREP_MODE,
-        "prep_version": config.RELEVANCE_PREP_VERSION,
-        "linear_c": config.RELEVANCE_LINEAR_C,
-        "batch_size": config.RELEVANCE_ENCODER_BATCH_SIZE,
-        "train_counts": train_counts,
-    }
-    (path / METADATA_FILENAME).write_text(json.dumps(metadata, indent=2) + "\n")
-    logger.info(f"Saved {pipeline_name} artifact to {model_path}")
+        raise RuntimeError("Relevance artifact is not compatible with this model.")
+    return relevance_classifier
 
 
 def load_classifier(

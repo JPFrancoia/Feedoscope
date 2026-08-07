@@ -14,7 +14,6 @@ from psycopg_pool import AsyncConnectionPool
 from feedoscope import config
 from feedoscope.entities import (
     Article,
-    RelevanceInferenceResults,
     SimplifiedTimeSensitivity,
     TimeSensitivity,
     UrgencyInferenceResults,
@@ -676,73 +675,6 @@ async def register_urgency_inference(
         )
     logger.info(
         f"Upserted {len(results.article_ids)} urgency scores for model_key={model_key}."
-    )
-
-
-async def register_super_important_inference(
-    results: RelevanceInferenceResults,
-) -> None:
-    """Insert or update super-important probabilities for one relevance model.
-
-    Args:
-        results: Relevance results containing article IDs, raw probabilities, and
-            the exact artifact version used for inference.
-
-    """
-    if not results.article_ids:
-        logger.info(
-            f"No super-important scores to cache for model_key={results.model_key}."
-        )
-        return
-
-    query = _get_query_from_file("upsert_super_important_inference.sql")
-    tag_query = _get_query_from_file("sync_important_auto_tags.sql")
-    rows = [
-        {
-            "article_id": article_id,
-            "model_key": results.model_key,
-            "super_important_score": score,
-        }
-        for article_id, score in zip(
-            results.article_ids,
-            results.super_important_scores,
-            strict=True,
-        )
-    ]
-
-    important_article_ids = [
-        article_id
-        for article_id, score in zip(
-            results.article_ids,
-            results.super_important_scores,
-            strict=True,
-        )
-        if score > 0.5
-    ]
-    ordinary_article_ids = [
-        article_id
-        for article_id, score in zip(
-            results.article_ids,
-            results.super_important_scores,
-            strict=True,
-        )
-        if score <= 0.5
-    ]
-
-    async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.executemany(query, rows)
-        await cur.execute(
-            tag_query,
-            {
-                "important_article_ids": important_article_ids,
-                "ordinary_article_ids": ordinary_article_ids,
-            },
-        )
-
-    logger.info(
-        f"Upserted {len(rows)} super-important scores and synchronized "
-        f"important-auto for {len(important_article_ids)} articles above 50% "
-        f"with model_key={results.model_key}."
     )
 
 

@@ -113,19 +113,17 @@ async def infer(recent_unread_articles: list[Article]) -> RelevanceInferenceResu
     model_path = find_latest_model(
         MODEL_NAME,
         clean_old_models=False,
-        required_filename=relevance_embedding.TWO_HEAD_ARTIFACT_FILENAME,
+        required_filename=relevance_embedding.ARTIFACT_FILENAME,
     )
-    logger.info(f"Loading two-head relevance artifact from {model_path}")
+    logger.info(f"Loading relevance artifact from {model_path}")
 
-    relevance_classifier, super_important_classifier = (
-        relevance_embedding.load_two_head_artifact(model_path)
-    )
+    relevance_classifier = relevance_embedding.load_relevance_artifact(model_path)
     # Load before cleanup so an interrupted training run cannot delete the last
     # working artifact just because it created a newer directory.
     find_latest_model(
         MODEL_NAME,
         clean_old_models=True,
-        required_filename=relevance_embedding.TWO_HEAD_ARTIFACT_FILENAME,
+        required_filename=relevance_embedding.ARTIFACT_FILENAME,
     )
     tokenizer, encoder = relevance_embedding.load_encoder(device)
     embeddings = await relevance_embedding.encode_articles(
@@ -134,31 +132,14 @@ async def infer(recent_unread_articles: list[Article]) -> RelevanceInferenceResu
         encoder,
         device,
     )
-    relevance_probs = relevance_embedding.predict_probabilities_from_embeddings(
+    scores = relevance_embedding.predict_probabilities_from_embeddings(
         embeddings, relevance_classifier
     )
-    super_important_probs: list[float] = []
-    scores = relevance_probs
-    if config.SUPER_IMPORTANT_INFERENCE_ENABLED:
-        preference_probs = relevance_embedding.predict_probabilities_from_embeddings(
-            embeddings, super_important_classifier
-        )
-        scores = relevance_embedding.combine_probabilities(
-            relevance_probs,
-            preference_probs,
-            bonus_strength=config.SUPER_IMPORTANT_BONUS,
-        )
-        super_important_probs = preference_probs.tolist()
-    else:
-        logger.info(
-            "Super-important inference is disabled; using relevance-only scores."
-        )
 
     return RelevanceInferenceResults(
         article_ids=[article.article_id for article in recent_unread_articles],
         article_titles=[article.title for article in recent_unread_articles],
         scores=(scores * 100).tolist(),
-        super_important_scores=super_important_probs,
         model_key=Path(model_path).name,
     )
 
@@ -178,8 +159,6 @@ async def main() -> None:
         f"Inference completed in {elapsed_time:.2f} seconds for {len(recent_unread_articles)} articles."
     )
 
-    if config.SUPER_IMPORTANT_INFERENCE_ENABLED:
-        await dr.register_super_important_inference(results)
     await dr.update_scores(
         article_ids=results.article_ids,
         article_titles=results.article_titles,
