@@ -34,16 +34,23 @@ ALLOW_TRAINING_WO_GPU = strtobool(os.getenv("ALLOW_TRAINING_WO_GPU", "False"))
 # false because production inference is expected to use a GPU.
 ALLOW_INFERENCE_WO_GPU = strtobool(os.getenv("ALLOW_INFERENCE_WO_GPU", "False"))
 
-# Select the input used for final relevance-score decay. Semantic freshness is
-# the default; urgency remains available for an immediate configuration rollback.
-_relevance_decay_backend = os.getenv("RELEVANCE_DECAY_BACKEND", "semantic_freshness")
+# Select the input used for final relevance-score decay. Fixed age decay is the
+# default; model-based backends remain available for rollback.
+_relevance_decay_backend = os.getenv("RELEVANCE_DECAY_BACKEND", "age")
 assert _relevance_decay_backend in (
+    "age",
     "semantic_freshness",
     "urgency",
-), "RELEVANCE_DECAY_BACKEND must be 'semantic_freshness' or 'urgency'"
+), "RELEVANCE_DECAY_BACKEND must be 'age', 'semantic_freshness', or 'urgency'"
 RELEVANCE_DECAY_BACKEND = cast(
-    Literal["semantic_freshness", "urgency"], _relevance_decay_backend
+    Literal["age", "semantic_freshness", "urgency"], _relevance_decay_backend
 )
+
+# Fixed half-life (in days) for the age-decay backend.
+AGE_DECAY_HALF_LIFE_DAYS = float(os.getenv("AGE_DECAY_HALF_LIFE_DAYS", "7"))
+assert (
+    math.isfinite(AGE_DECAY_HALF_LIFE_DAYS) and AGE_DECAY_HALF_LIFE_DAYS > 0
+), "AGE_DECAY_HALF_LIFE_DAYS must be finite and positive"
 
 # Half-life boundaries (in days) for the legacy urgency-based relevance decay.
 HALF_LIFE_EVERGREEN = float(os.getenv("HALF_LIFE_EVERGREEN", "120"))

@@ -1,11 +1,17 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 import os
+import subprocess
+import sys
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 os.environ.setdefault("DATABASE_URL", "postgresql://test")
 
 from feedoscope import main
+from feedoscope.entities import Article, RelevanceInferenceResults
 
 
 def test_inference_age_range_validation() -> None:
@@ -83,6 +89,113 @@ def test_invalid_half_life_is_rejected(half_life_days: float | None) -> None:
             date_entered=datetime.now(timezone.utc),
             half_life_days=half_life_days,  # type: ignore[arg-type]
         )
+
+
+def test_age_backend_uses_configured_half_life(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(main.config, "RELEVANCE_DECAY_BACKEND", "age")
+    monkeypatch.setattr(main.config, "AGE_DECAY_HALF_LIFE_DAYS", 7.0)
+
+    assert main.get_decay_half_life(urgency_prob=None, expected_lifetime_days=None) == 7
+    assert main.get_decay_half_life(urgency_prob=1.0, expected_lifetime_days=365) == 7
+
+
+def test_age_decay_config_defaults_to_seven_days() -> None:
+    env = os.environ.copy()
+    env.pop("RELEVANCE_DECAY_BACKEND", None)
+    env.pop("AGE_DECAY_HALF_LIFE_DAYS", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from feedoscope import config; "
+            "print(config.RELEVANCE_DECAY_BACKEND, config.AGE_DECAY_HALF_LIFE_DAYS)",
+        ],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.strip() == "age 7.0"
+
+
+@pytest.mark.parametrize("value", ("0", "nan"))
+def test_age_decay_config_rejects_invalid_half_life(value: str) -> None:
+    env = os.environ | {"AGE_DECAY_HALF_LIFE_DAYS": value}
+    result = subprocess.run(
+        [sys.executable, "-c", "from feedoscope import config"],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "AGE_DECAY_HALF_LIFE_DAYS must be finite and positive" in result.stderr
+
+
+def test_age_backend_skips_model_decay_inference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    article = Article(
+        article_id=1,
+        title="Article",
+        starred=False,
+        feed_name="Feed",
+        content="Content",
+        link="https://example.com/article",
+        author="Author",
+        date_entered=datetime.now(timezone.utc),
+        last_read=None,
+        time_sensitivity_score=None,
+        tags=[],
+        vote=0,
+        status="unread",
+    )
+    relevance_results = RelevanceInferenceResults(
+        article_ids=[1],
+        article_titles=["Article"],
+        scores=[100.0],
+        model_key="test",
+    )
+    urgency_model_key = Mock(return_value="urgency-test")
+    urgency_infer = AsyncMock()
+    freshness_infer = AsyncMock()
+    update_scores = AsyncMock()
+
+    monkeypatch.setattr(main.config, "RELEVANCE_DECAY_BACKEND", "age")
+    monkeypatch.setattr(main.config, "AGE_DECAY_HALF_LIFE_DAYS", 7.0)
+    monkeypatch.setattr(
+        main.dr,
+        "global_pool",
+        SimpleNamespace(open=AsyncMock(), close=AsyncMock()),
+    )
+    monkeypatch.setattr(main.dr, "clear_downvoted_unread_scores", AsyncMock())
+    monkeypatch.setattr(main.dr, "update_scores", update_scores)
+    monkeypatch.setattr(
+        main.llm_infer_urgency,
+        "get_articles_for_refresh",
+        AsyncMock(return_value=[article]),
+    )
+    monkeypatch.setattr(
+        main.llm_infer_urgency, "get_active_model_key", urgency_model_key
+    )
+    monkeypatch.setattr(main.llm_infer_urgency, "infer", urgency_infer)
+    monkeypatch.setattr(main.llm_infer_semantic_freshness, "infer", freshness_infer)
+    monkeypatch.setattr(
+        main.llm_infer,
+        "infer",
+        AsyncMock(return_value=relevance_results),
+    )
+
+    asyncio.run(main.main())
+
+    urgency_model_key.assert_not_called()
+    urgency_infer.assert_not_awaited()
+    freshness_infer.assert_not_awaited()
+    update_scores.assert_awaited_once()
 
 
 def test_semantic_backend_uses_lifetime_or_skips_decay(
