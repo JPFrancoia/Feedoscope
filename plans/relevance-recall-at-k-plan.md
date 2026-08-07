@@ -110,3 +110,7 @@ precision and ROC AUC. Add Recall@10, Recall@25, and Recall@50.
   does not change the result.
 - Historical Relevance rows show `-` for missing Recall@k values.
 - No schema migration or new database column was necessary.
+- Production evaluation job `feedoscope-eval-recall-e796b76` completed on
+  2026-08-07 with 150 good and 150 bad holdout articles.
+- The stored metrics are average precision 0.9334, ROC AUC 0.9456,
+  Recall@10 0.0667, Recall@25 0.1667, and Recall@50 0.3133.
