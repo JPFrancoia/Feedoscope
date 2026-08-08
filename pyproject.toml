@@ -38,12 +38,8 @@ dev = [
 train = [
     "transformers[torch]>=4.55.0",
 ]
-infer = [
-    "llama-cpp-python>=0.3.16",
-]
-
 [tool.uv]
-default-groups = ["dev", "train", "infer"]
+default-groups = ["dev", "train"]
 
 [tool.uv.sources]
 microsoft-python-type-stubs = { git = "https://github.com/microsoft/python-type-stubs.git" }

@@ -26,38 +26,19 @@ assert DATABASE_URL != "", "DATABASE_URL environment variable is not set"
 # colored console config, while production can point at the JSON logger config.
 LOGGING_CONFIG = os.getenv("LOGGING_CONFIG", "logging.conf")
 
-# Allow relevance or urgency training to fall back to CPU when CUDA is not
-# available. Defaults to false because training is expected to run on a GPU.
+# Allow training to fall back to CPU when CUDA is not available. Defaults to
+# false because training is expected to run on a GPU.
 ALLOW_TRAINING_WO_GPU = strtobool(os.getenv("ALLOW_TRAINING_WO_GPU", "False"))
 
 # Allow inference commands to run on CPU when CUDA is not available. Defaults to
 # false because production inference is expected to use a GPU.
 ALLOW_INFERENCE_WO_GPU = strtobool(os.getenv("ALLOW_INFERENCE_WO_GPU", "False"))
 
-# Select the input used for final relevance-score decay. Fixed age decay is the
-# default; model-based backends remain available for rollback.
-_relevance_decay_backend = os.getenv("RELEVANCE_DECAY_BACKEND", "age")
-assert _relevance_decay_backend in (
-    "age",
-    "semantic_freshness",
-    "urgency",
-), "RELEVANCE_DECAY_BACKEND must be 'age', 'semantic_freshness', or 'urgency'"
-RELEVANCE_DECAY_BACKEND = cast(
-    Literal["age", "semantic_freshness", "urgency"], _relevance_decay_backend
-)
-
 # Fixed half-life (in days) for the age-decay backend.
 AGE_DECAY_HALF_LIFE_DAYS = float(os.getenv("AGE_DECAY_HALF_LIFE_DAYS", "7"))
 assert (
     math.isfinite(AGE_DECAY_HALF_LIFE_DAYS) and AGE_DECAY_HALF_LIFE_DAYS > 0
 ), "AGE_DECAY_HALF_LIFE_DAYS must be finite and positive"
-
-# Half-life boundaries (in days) for the legacy urgency-based relevance decay.
-HALF_LIFE_EVERGREEN = float(os.getenv("HALF_LIFE_EVERGREEN", "120"))
-HALF_LIFE_URGENT = float(os.getenv("HALF_LIFE_URGENT", "10"))
-assert (
-    0 < HALF_LIFE_URGENT <= HALF_LIFE_EVERGREEN
-), "HALF_LIFE_URGENT must be positive and no greater than HALF_LIFE_EVERGREEN"
 
 # Size of the held-out validation set used by training and eval commands.
 # Production-style runs leave this at 0 to skip validation entirely.
@@ -113,16 +94,3 @@ assert (
 ), "IMPORTANT_ARTICLE_WEIGHT must be finite and at least 1"
 # Keep this legacy value for old standalone artifact compatibility only.
 RELEVANCE_LINEAR_C = float(os.getenv("RELEVANCE_LINEAR_C", "5.0"))
-
-# Inverse regularization strength for the logistic-regression urgency head.
-# Urgency intentionally shares the same embedding config as relevance for cache
-# reuse, but keeps its own classifier regularization.
-URGENCY_LINEAR_C = float(os.getenv("URGENCY_LINEAR_C", "1.0"))
-
-# The freshness model uses two cumulative logistic heads over the shared
-# embedding cache. These values retain the selected simple linear model.
-SEMANTIC_FRESHNESS_LINEAR_C = float(os.getenv("SEMANTIC_FRESHNESS_LINEAR_C", "20.0"))
-SEMANTIC_FRESHNESS_WEIGHT_EXPONENT = float(
-    os.getenv("SEMANTIC_FRESHNESS_WEIGHT_EXPONENT", "0.375")
-)
-assert SEMANTIC_FRESHNESS_WEIGHT_EXPONENT > 0

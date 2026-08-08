@@ -10,14 +10,12 @@ select
     e.author,
     e.published_at as date_entered,
     e.changed_at as last_read,
-    ts.score as time_sensitivity_score,
     COALESCE(e.tags, array[]::text[]) as tags,
     e.vote,
     e.status
 from
     entries e
     join feeds f on e.feed_id = f.id
-    left join time_sensitivity ts on ts.article_id = e.id
 where
     e.status = 'unread'
     and e.vote != -1  -- Exclude bad articles

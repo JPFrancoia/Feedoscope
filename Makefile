@@ -16,10 +16,7 @@ pkg:
 	# trivy image ${NAME}:${TAG}
 
 lint:
-	uv run --no-group infer mypy .
-
-install_dev:
-	uv sync --no-group infer
+	uv run mypy .
 
 install:
 	uv sync
@@ -33,23 +30,11 @@ infer:
 warm_embeddings:
 	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.warm_relevance_embeddings
 
-time:
-	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.infer_time_sensitivity
 
-time_simple:
-	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.infer_simpler_time_sensitivity
 
-train_urgency:
-	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.llm_learn_urgency
 
-infer_urgency:
-	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.llm_infer_urgency
 
-train_freshness:
-	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.llm_learn_semantic_freshness
 
-infer_freshness:
-	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.llm_infer_semantic_freshness
 
 full_infer:
 	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.main

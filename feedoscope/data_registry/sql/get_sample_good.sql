@@ -11,7 +11,6 @@ with numbered_articles as (
         e.author,
         e.published_at as date_entered,
         e.changed_at as last_read,
-        ts.score as time_sensitivity_score,
         COALESCE(e.tags, array[]::text[]) as tags,
         e.vote,
         e.status,
@@ -19,7 +18,6 @@ with numbered_articles as (
     from
         entries e
         join feeds f on e.feed_id = f.id
-        left join time_sensitivity ts on ts.article_id = e.id
     where
         e.status = 'read'
         and e.vote >= 0  -- vote=0 or vote=1 are considered good
@@ -37,7 +35,6 @@ select
     author,
     date_entered,
     last_read,
-    time_sensitivity_score,
     tags,
     vote,
     status

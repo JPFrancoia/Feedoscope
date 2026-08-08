@@ -23,14 +23,14 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 
-# Install dependencies (exclude dev and infer groups — llama-cpp-python is only used locally for distillation)
-RUN uv sync --locked --no-install-project --no-editable --no-group dev --no-group infer
+# Install runtime dependencies without the development tools.
+RUN uv sync --locked --no-install-project --no-editable --no-group dev
 
 # Copy the project into the intermediate image
 ADD . /app
 
-# Sync the project (exclude dev and infer groups)
-RUN uv sync --locked --no-editable --no-group dev --no-group infer
+# Sync the project without the development tools.
+RUN uv sync --locked --no-editable --no-group dev
 
 FROM python:3.12-slim AS runtime
 

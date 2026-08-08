@@ -6,14 +6,9 @@ import math
 import time
 
 from custom_logging import init_logging
-from feedoscope import (
-    config,
-    llm_infer,
-    llm_infer_semantic_freshness,
-    llm_infer_urgency,
-    relevance_embedding,
-)
+from feedoscope import config, llm_infer, relevance_embedding
 from feedoscope.data_registry import data_registry as dr
+from feedoscope.entities import Article
 from feedoscope.utils import clean_title
 
 logger = logging.getLogger(__name__)
@@ -55,15 +50,8 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def compute_urgency_half_life(urgency_prob: float) -> float:
-    """Interpolate the legacy urgency-based relevance half-life in days."""
-    return config.HALF_LIFE_EVERGREEN + urgency_prob * (
-        config.HALF_LIFE_URGENT - config.HALF_LIFE_EVERGREEN
-    )
-
-
 def is_valid_half_life(half_life_days: float | None) -> bool:
-    """Return whether a predicted lifetime can safely drive score decay."""
+    """Return whether a half-life can safely drive score decay."""
     return (
         half_life_days is not None
         and math.isfinite(half_life_days)
@@ -71,42 +59,12 @@ def is_valid_half_life(half_life_days: float | None) -> bool:
     )
 
 
-def get_decay_half_life(
-    urgency_prob: float | None,
-    expected_lifetime_days: float | None,
-) -> float | None:
-    """Return the half-life selected by the active decay backend."""
-    if config.RELEVANCE_DECAY_BACKEND == "age":
-        return config.AGE_DECAY_HALF_LIFE_DAYS
-    if config.RELEVANCE_DECAY_BACKEND == "semantic_freshness":
-        return (
-            expected_lifetime_days
-            if is_valid_half_life(expected_lifetime_days)
-            else None
-        )
-    if urgency_prob is None:
-        return None
-    return compute_urgency_half_life(urgency_prob)
-
-
 def decay_relevance_score(
     original_score: float,
     date_entered: datetime,
     half_life_days: float,
 ) -> float:
-    """Apply exponential time decay using a concrete half-life in days.
-
-    Args:
-        original_score: The unrounded raw relevance score (0-100).
-        date_entered: When the article was published.
-        half_life_days: Days until the score is halved.
-
-    Returns:
-        The unrounded decayed relevance score.
-
-    Raises:
-        ValueError: If the half-life is not finite and positive.
-    """
+    """Apply exponential time decay using a concrete half-life in days."""
     if not is_valid_half_life(half_life_days):
         raise ValueError("half_life_days must be finite and positive")
 
@@ -114,11 +72,18 @@ def decay_relevance_score(
         0.0,
         (datetime.now(timezone.utc) - date_entered).total_seconds() / 3600 / 24,
     )
-    decayed_score = original_score * math.exp(
-        -math.log(2) * days_passed / half_life_days
-    )
+    return original_score * math.exp(-math.log(2) * days_passed / half_life_days)
 
-    return decayed_score
+
+async def get_articles_for_scoring() -> list[Article]:
+    """Return recent unread articles plus a sample of older unread articles."""
+    recent_articles = await dr.get_previous_days_unread_articles(LOOKBACK_DAYS)
+    old_articles = await dr.get_old_unread_articles(
+        age_in_days=LOOKBACK_DAYS,
+        max_age_in_days=MAX_LOOKBACK_DAYS_SAMPLING,
+        sampling=SAMPLING,
+    )
+    return recent_articles + old_articles
 
 
 async def main(
@@ -130,35 +95,20 @@ async def main(
     if age_range is None:
         logger.info(
             f"Starting inference: lookback={LOOKBACK_DAYS}d, sampling={SAMPLING}, "
-            f"decay={config.RELEVANCE_DECAY_BACKEND}"
+            f"half-life={config.AGE_DECAY_HALF_LIFE_DAYS}d"
         )
     else:
         logger.info(
             f"Starting inference for article ages [{age_range[0]}, {age_range[1]}) "
-            f"days with decay={config.RELEVANCE_DECAY_BACKEND}"
+            f"days with half-life={config.AGE_DECAY_HALF_LIFE_DAYS}d"
         )
     logger.info("Opening database pool...")
     await dr.global_pool.open(wait=True)
     logger.info("Database pool opened.")
     try:
         await dr.clear_downvoted_unread_scores()
-        urgency_model_key: str | None = None
-        if config.RELEVANCE_DECAY_BACKEND != "age":
-            urgency_model_key = llm_infer_urgency.get_active_model_key()
-            logger.info(f"Active urgency model key: {urgency_model_key}")
-        else:
-            logger.info(
-                f"Using fixed age-decay half-life: "
-                f"{config.AGE_DECAY_HALF_LIFE_DAYS} days"
-            )
-
-        # Step 1: Build the active article set once for every enabled backend.
         if age_range is None:
-            articles = await llm_infer_urgency.get_articles_for_refresh(
-                number_of_days=LOOKBACK_DAYS,
-                max_age_in_days=MAX_LOOKBACK_DAYS_SAMPLING,
-                sampling=SAMPLING,
-            )
+            articles = await get_articles_for_scoring()
         else:
             articles = await dr.get_unread_articles_by_age(*age_range)
             logger.info(
@@ -171,126 +121,31 @@ async def main(
             logger.info("No articles to score. Exiting.")
             return
 
-        # Remove past scores and time sensitivity from titles.
-        # This should be done in llm_infer.infer as well, but better safe than sorry.
-        for art in articles:
-            art.title = clean_title(art.title)
+        for article in articles:
+            article.title = clean_title(article.title)
 
         start_time = time.time()
-
-        # Step 2: Preserve model-backend refresh behavior for rollback.
-        if urgency_model_key is not None:
-            logger.info("Starting urgency inference for the active article set...")
-            urgency_start = time.time()
-            urgency_results = await llm_infer_urgency.infer(articles)
-            await dr.register_urgency_inference(
-                urgency_results,
-                model_key=urgency_model_key,
-            )
-            urgency_elapsed = time.time() - urgency_start
-            logger.info(
-                f"Urgency refresh completed in {urgency_elapsed:.2f} seconds for "
-                f"{len(urgency_results.article_ids)} articles with "
-                f"model_key={urgency_model_key}."
-            )
-
-        # Step 3: Skip model-based freshness only for fixed age decay.
-        freshness_half_lives: dict[int, float] = {}
-        if config.RELEVANCE_DECAY_BACKEND != "age":
-            logger.info("Starting freshness inference...")
-            freshness_start = time.time()
-            try:
-                freshness_results = await llm_infer_semantic_freshness.infer(articles)
-                freshness_half_lives = dict(
-                    zip(
-                        freshness_results.article_ids,
-                        freshness_results.expected_lifetime_days,
-                        strict=True,
-                    )
-                )
-            except Exception:
-                logger.exception(
-                    "Freshness inference failed; semantic decay will keep raw scores."
-                )
-            else:
-                logger.info(
-                    f"Freshness inference completed in "
-                    f"{time.time() - freshness_start:.2f} seconds for "
-                    f"{len(freshness_results.article_ids)} articles."
-                )
-
-        # Step 4: Run relevance inference.
         logger.info("Starting inference for relevance scores...")
-        relevance_start = time.time()
         relevance_scores = await llm_infer.infer(articles)
-        relevance_elapsed = time.time() - relevance_start
         logger.info(
-            f"Relevance inference completed in {relevance_elapsed:.2f} seconds "
+            f"Relevance inference completed in {time.time() - start_time:.2f} seconds "
             f"for {len(relevance_scores.article_ids)} articles."
         )
 
-        # Step 5: Fetch the legacy urgency scores only when the rollback backend is active.
-        urgency_scores: dict[int, float] = {}
-        if config.RELEVANCE_DECAY_BACKEND == "urgency":
-            assert urgency_model_key is not None
-            article_ids = [article.article_id for article in articles]
-            urgency_scores = await dr.get_urgency_scores_for_articles(
-                article_ids,
-                model_key=urgency_model_key,
-            )
-            logger.info(
-                f"Found refreshed urgency scores for {len(urgency_scores)}/{len(articles)} "
-                "articles."
-            )
-
-        # Step 6: Apply time decay from the selected backend.
-        for idx in range(len(articles)):
-            article = articles[idx]
+        for idx, article in enumerate(articles):
             assert article.article_id == relevance_scores.article_ids[idx]
-
-            urgency_prob = urgency_scores.get(article.article_id)
-            half_life_days = get_decay_half_life(
-                urgency_prob=urgency_prob,
-                expected_lifetime_days=freshness_half_lives.get(article.article_id),
-            )
-            if half_life_days is None:
-                if config.RELEVANCE_DECAY_BACKEND == "semantic_freshness":
-                    logger.warning(
-                        f"Article {article.article_id} has no valid semantic freshness "
-                        "lifetime. Skipping decay."
-                    )
-                else:
-                    logger.warning(
-                        f"Article {article.article_id} has no refreshed urgency score. "
-                        "Skipping decay."
-                    )
-                continue
-
             relevance_scores.scores[idx] = decay_relevance_score(
                 original_score=relevance_scores.scores[idx],
                 date_entered=article.date_entered,
-                half_life_days=half_life_days,
+                half_life_days=config.AGE_DECAY_HALF_LIFE_DAYS,
             )
 
-        inference_time = time.time() - start_time
-        logger.info(
-            f"Inference completed in {inference_time:.2f} seconds "
-            f"for {len(articles)} articles."
-        )
-
-        # Step 7: Write final decayed scores to DB.
         await dr.update_scores(
             article_ids=relevance_scores.article_ids,
             article_titles=relevance_scores.article_titles,
             scores=relevance_embedding.prepare_scores_for_storage(
                 relevance_scores.scores
             ),
-        )
-
-        db_write_time = time.time() - inference_time - start_time
-        logger.debug(
-            f"Scores updated in the database for {len(relevance_scores.article_ids)} "
-            f"articles in {db_write_time:.2f} seconds."
         )
     finally:
         await dr.global_pool.close()

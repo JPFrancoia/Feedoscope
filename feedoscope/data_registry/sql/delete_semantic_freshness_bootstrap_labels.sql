@@ -1,1 +1,0 @@
-delete from freshness_bootstrap_labels;

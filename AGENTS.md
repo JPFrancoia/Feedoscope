@@ -2,22 +2,15 @@
 
 ## Project Overview
 
-Feedoscope is a Python ML pipeline that scores RSS articles from a Miniflux database
-by relevance (prompted EmbeddingGemma embeddings + MLP) and urgency (fine-tuned ModernBERT), plus time
-sensitivity (local Ministral-8B via
-llama.cpp). It reads from and writes to a PostgreSQL database (Miniflux schema with
-custom extensions). Deployed on Kubernetes via Docker images with CUDA/GPU support.
+Feedoscope is a Python ML pipeline that scores RSS articles for relevance. It reads from and writes to a PostgreSQL database with Miniflux schema extensions. It runs in Kubernetes with CUDA/GPU support.
 
 ## Build & Run Commands
 
 Package manager: **uv** (lockfile: `uv.lock`, Python 3.12.11 pinned in `.python-version`)
 
 ```bash
-# Install all dependency groups (dev + train + infer)
+# Install all dependency groups
 make install          # or: uv sync
-
-# Install without infer group (no llama-cpp-python, faster)
-make install_dev      # or: uv sync --no-group infer
 
 # Add a dependency
 uv add <package>
@@ -27,7 +20,7 @@ uv add <package>
 
 ```bash
 # Type-check (mypy)
-make lint             # or: uv run --no-group infer mypy .
+make lint             # or: uv run mypy .
 
 # Format (black + isort)
 make format           # or: uv run black . && uv run isort .
@@ -42,20 +35,14 @@ compatibility. No pre-commit hooks are currently active.
 
 ## Tests
 
-There are **no tests** in this project currently. No pytest configuration exists.
-If adding tests:
-- Place them in a `tests/` directory at the project root
-- Use pytest: `uv run pytest tests/`
-- Run a single test: `uv run pytest tests/test_file.py::test_function -v`
-- The `tests` module is already listed in isort's `known_localproject`
+Tests are in `tests/`. Run `uv run pytest tests/`. Run one test with `uv run pytest tests/test_file.py::test_function -v`.
 
 ## Run Commands (require DATABASE_URL env var)
 
 ```bash
 make train            # Train the relevance model
 make infer            # Run relevance inference only
-make time             # Run time sensitivity inference only
-make full_infer       # Run full pipeline (relevance + time sensitivity)
+make full_infer       # Run relevance inference with fixed age decay
 ```
 
 All run commands set `LOGGING_CONFIG=dev_logging.conf` for colored console output.
@@ -195,18 +182,17 @@ def find_latest_model(model_name: str, clean_old_models: bool = True) -> str:
 
 ```
 feedoscope/                  # Main application package
-  main.py                    # Orchestrator: relevance + time sensitivity
+  main.py                    # Relevance scoring with fixed age decay
   config.py                  # Environment-based configuration
   entities.py                # Pydantic data models
   utils.py                   # Text cleaning utilities
-  llm_learn.py               # Relevance training (EmbeddingGemma + logistic regression)
+  llm_learn.py               # Relevance training (EmbeddingGemma + MLP)
   llm_infer.py               # Relevance inference
-  infer_time_sensitivity.py  # Time sensitivity via local Llama GGUF
   data_registry/
     data_registry.py         # All DB access functions
     sql/                     # Raw .sql query files
 custom_logging/              # Logging setup package
 db/migrations/               # golang-migrate SQL migrations
-models/                      # (gitignored) trained model checkpoints + GGUF files
+models/                      # (gitignored) trained model artifacts
 embeddings/                  # Pre-computed numpy embeddings
 ```
