@@ -5,7 +5,6 @@ import os
 import time
 
 import numpy as np
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     average_precision_score,
     f1_score,
@@ -14,6 +13,7 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
+from sklearn.neural_network import MLPClassifier
 import torch
 from transformers import PreTrainedTokenizerBase
 
@@ -47,9 +47,7 @@ def compute_metrics(
 def build_model_path(good_articles: list[Article], bad_articles: list[Article]) -> str:
     """Build the on-disk artifact path for a relevance training run."""
     return (
-        f"models/{config.RELEVANCE_MODEL_NAME.replace('/', '-')}_"
-        f"{config.RELEVANCE_MAX_LENGTH}_{config.RELEVANCE_TEXT_PREP_MODE}_"
-        f"embedding_linear_c{config.RELEVANCE_LINEAR_C}_"
+        f"models/{relevance_embedding.get_model_family_prefix()}_"
         f"{datetime.date.today().strftime('%Y_%m_%d')}_"
         f"{len(good_articles)}_good_{len(bad_articles)}_not_good"
     )
@@ -60,22 +58,17 @@ async def train_model(
     bad_articles: list[Article],
     model_path: str,
     device: torch.device,
-) -> tuple[
-    torch.nn.Module,
-    PreTrainedTokenizerBase,
-    LogisticRegression,
-]:
-    """Train the embedding-linear relevance backend and save its artifact."""
+) -> tuple[torch.nn.Module, PreTrainedTokenizerBase, MLPClassifier]:
+    """Train the relevance head from one embedding matrix."""
     tokenizer, encoder = relevance_embedding.load_encoder(device)
     training_articles = good_articles + bad_articles
-    labels = np.array([1] * len(good_articles) + [0] * len(bad_articles))
-    sample_weights = relevance_embedding.build_sample_weights(training_articles)
-
-    n_excellent = sum(1 for weight in sample_weights if weight > 1.0)
+    relevance_labels = np.array([1] * len(good_articles) + [0] * len(bad_articles))
+    important_count = sum(
+        relevance_embedding.is_important(article) for article in good_articles
+    )
     logger.info(
-        f"Sample weights: {n_excellent} excellent articles "
-        f"(weight={config.EXCELLENT_WEIGHT}), "
-        f"{len(sample_weights) - n_excellent} standard (weight=1.0)"
+        f"Training relevance with {len(good_articles)} good, {len(bad_articles)} bad, "
+        f"and {important_count} explicitly preferred articles."
     )
 
     if torch.cuda.is_available():
@@ -88,13 +81,25 @@ async def train_model(
         encoder,
         device,
     )
-    classifier = relevance_embedding.fit_classifier(embeddings, labels, sample_weights)
-    relevance_embedding.save_artifact(
+    relevance_sample_weights = relevance_embedding.build_relevance_sample_weights(
+        training_articles
+    )
+    logger.info(
+        f"Relevance MLP uses {config.IMPORTANT_ARTICLE_WEIGHT}x weights for "
+        f"{important_count} important articles."
+    )
+    relevance_classifier = relevance_embedding.fit_classifier(
+        embeddings,
+        relevance_labels,
+        pipeline_label="relevance",
+        sample_weights=relevance_sample_weights,
+    )
+    relevance_embedding.save_relevance_artifact(
         model_path,
-        classifier,
+        relevance_classifier,
         train_counts={"good": len(good_articles), "bad": len(bad_articles)},
     )
-    return encoder, tokenizer, classifier
+    return encoder, tokenizer, relevance_classifier
 
 
 async def main() -> None:
@@ -121,19 +126,19 @@ async def main() -> None:
 
     model_path = build_model_path(good_articles, bad_articles)
 
-    if os.path.exists(model_path):
-        logger.info(f"Loading embedding artifact from {model_path}")
+    if os.path.exists(os.path.join(model_path, relevance_embedding.ARTIFACT_FILENAME)):
+        logger.info(f"Loading relevance artifact from {model_path}")
         tokenizer, encoder = relevance_embedding.load_encoder(device)
-        classifier = relevance_embedding.load_classifier(model_path)
+        relevance_classifier = relevance_embedding.load_relevance_artifact(model_path)
     else:
-        logger.info("Training new embedding-linear relevance backend...")
-        encoder, tokenizer, classifier = await train_model(
+        logger.info("Training new relevance backend...")
+        encoder, tokenizer, relevance_classifier = await train_model(
             good_articles,
             bad_articles,
             model_path,
             device,
         )
-        logger.info(f"Embedding artifact saved to {model_path}")
+        logger.info(f"Relevance artifact saved to {model_path}")
 
     elapsed_time = time.time() - start_time
     logger.info(f"Training completed in {elapsed_time:.2f} seconds.")
@@ -154,14 +159,14 @@ async def main() -> None:
         good_validation,
         tokenizer,
         encoder,
-        classifier,
+        relevance_classifier,
         device,
     )
     not_good_probs = await relevance_embedding.predict_probabilities(
         not_good_validation,
         tokenizer,
         encoder,
-        classifier,
+        relevance_classifier,
         device,
     )
 

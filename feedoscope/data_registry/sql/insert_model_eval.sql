@@ -1,6 +1,7 @@
 insert into model_evals (
     eval_date,
     model,
+    evaluation_model,
     training,
     eval,
     metrics_accuracy,
@@ -9,11 +10,21 @@ insert into model_evals (
     metrics_f1,
     metrics_roc_auc,
     metrics_average_precision,
-    metrics_log_loss
+    metrics_log_loss,
+    metrics_rps,
+    metrics_weighted_kappa,
+    metrics_log_duration_mae,
+    metrics_super_important_average_precision,
+    metrics_relevance_average_precision,
+    metrics_recall_at_10,
+    metrics_recall_at_25,
+    metrics_recall_at_50,
+    metrics_super_important_bonus
 )
 values (
     %(eval_date)s,
     %(model_name)s,
+    %(evaluation_model)s,
     %(training)s,
     %(eval_counts)s,
     %(metrics_accuracy)s,
@@ -22,5 +33,14 @@ values (
     %(metrics_f1)s,
     %(metrics_roc_auc)s,
     %(metrics_average_precision)s,
-    %(metrics_log_loss)s
+    %(metrics_log_loss)s,
+    %(metrics_rps)s,
+    %(metrics_weighted_kappa)s,
+    %(metrics_log_duration_mae)s,
+    %(metrics_super_important_average_precision)s,
+    %(metrics_relevance_average_precision)s,
+    %(metrics_recall_at_10)s,
+    %(metrics_recall_at_25)s,
+    %(metrics_recall_at_50)s,
+    %(metrics_super_important_bonus)s
 );

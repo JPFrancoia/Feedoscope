@@ -16,10 +16,7 @@ pkg:
 	# trivy image ${NAME}:${TAG}
 
 lint:
-	uv run --no-group infer mypy .
-
-install_dev:
-	uv sync --no-group infer
+	uv run mypy .
 
 install:
 	uv sync
@@ -30,23 +27,20 @@ train:
 infer:
 	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.llm_infer
 
-time:
-	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.infer_time_sensitivity
+warm_embeddings:
+	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.warm_relevance_embeddings
 
-time_simple:
-	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.infer_simpler_time_sensitivity
 
-train_urgency:
-	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.llm_learn_urgency
 
-infer_urgency:
-	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.llm_infer_urgency
+
+
+
 
 full_infer:
 	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.main
 
 eval:
-	LOGGING_CONFIG=dev_logging.conf VALIDATION_SIZE=100 uv run python -m feedoscope.eval_models
+	LOGGING_CONFIG=dev_logging.conf VALIDATION_SIZE=150 uv run python -m feedoscope.eval_models
 
 up:
 	migrate -database ${DATABASE_URL} -path db/migrations up 1

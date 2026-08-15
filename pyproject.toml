@@ -31,21 +31,24 @@ dev = [
     "microsoft-python-type-stubs",
     "mypy>=1.17.1",
     "pre-commit>=4.2.0",
+    "pytest>=9.1.1",
     "ruff>=0.12.2",
     "types-tqdm>=4.67.0.20250516",
 ]
 train = [
     "transformers[torch]>=4.55.0",
 ]
-infer = [
-    "llama-cpp-python>=0.3.16",
-]
-
 [tool.uv]
-default-groups = ["dev", "train", "infer"]
+default-groups = ["dev", "train"]
 
 [tool.uv.sources]
 microsoft-python-type-stubs = { git = "https://github.com/microsoft/python-type-stubs.git" }
+
+[tool.mypy]
+exclude = "^experiments/"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
 
 [tool.isort]
 # Make isort compatible with black

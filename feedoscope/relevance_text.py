@@ -1,3 +1,5 @@
+import logging
+import time
 from typing import Literal
 
 from cleantext import clean  # type: ignore[import]
@@ -7,6 +9,9 @@ from feedoscope.entities import Article
 from feedoscope.utils import clean_title, strip_html_keep_text
 
 TextPrepMode = Literal["single_blob", "title_head"]
+
+logger = logging.getLogger(__name__)
+PROGRESS_LOG_INTERVAL_SECONDS = 30
 
 
 def _clean_text(text: str) -> str:
@@ -73,7 +78,8 @@ def prepare_articles_text(
 ) -> list[str]:
     """Prepare model-ready text for each article using the configured mode."""
     texts: list[str] = []
-    for article in articles:
+    last_progress_log = time.monotonic()
+    for index, article in enumerate(articles, start=1):
         if mode == "single_blob":
             text = prepare_single_blob(article.title, article.content)
         elif mode == "title_head":
@@ -86,5 +92,12 @@ def prepare_articles_text(
         else:
             raise ValueError(f"Unsupported relevance text prep mode: {mode}")
         texts.append(text)
+
+        now = time.monotonic()
+        if now - last_progress_log >= PROGRESS_LOG_INTERVAL_SECONDS or index == len(
+            articles
+        ):
+            logger.info(f"Prepared article text {index}/{len(articles)}.")
+            last_progress_log = now
 
     return texts

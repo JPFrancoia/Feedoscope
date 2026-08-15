@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 import datetime
 from functools import lru_cache
 from importlib.resources import files
@@ -11,14 +12,11 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
 from feedoscope import config
-from feedoscope.entities import (
-    Article,
-    SimplifiedTimeSensitivity,
-    TimeSensitivity,
-    UrgencyInferenceResults,
-)
+from feedoscope.entities import Article
 
 logger = logging.getLogger(__name__)
+
+SCORE_UPDATE_BATCH_SIZE = 1000
 
 
 # For explanation about type hinting, see:
@@ -55,6 +53,21 @@ def _parse_embedding_bytes(raw_bytes: bytes | memoryview) -> np.ndarray:
 def _format_embedding_bytes(embedding: np.ndarray) -> bytes:
     """Serialize a dense embedding as raw float32 bytes for storage."""
     return np.asarray(embedding, dtype=np.float32).tobytes()
+
+
+async def get_articles_for_embedding_warm(
+    after_article_id: int,
+    batch_size: int,
+) -> list[Article]:
+    """Return one ascending entry batch for the resumable embedding warmer."""
+    query = _get_query_from_file("get_articles_for_embedding_warm.sql")
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(
+            query,
+            {"after_article_id": after_article_id, "batch_size": batch_size},
+        )
+        data = await cur.fetchall()
+    return [Article(**article) for article in data]
 
 
 async def get_read_articles_training(
@@ -187,27 +200,16 @@ async def get_sample_not_good(validation_size: int) -> list[Article]:
     return [Article(**article) for article in data]
 
 
-async def get_read_articles_with_urgency_tags() -> list[tuple[Article, int]]:
-    """Get read articles labeled with trusted Miniflux urgency tags.
-
-    Returns:
-        List of ``(Article, urgency_label)`` tuples sourced only from read
-        articles tagged ``0-urgency`` or ``1-urgency``.
-
-    """
-    query = _get_query_from_file("get_read_articles_with_urgency_tags.sql")
+async def clear_downvoted_unread_scores() -> int:
+    """Clear stale scores from unread articles excluded after a downvote."""
+    query = _get_query_from_file("clear_downvoted_unread_scores.sql")
 
     async with global_pool.connection() as conn, conn.cursor() as cur:
         await cur.execute(query)
-        data = await cur.fetchall()
+        cleared = cur.rowcount
 
-    results: list[tuple[Article, int]] = []
-    for row in data:
-        urgency_label = row.pop("urgency_label")
-        article = Article(**row)
-        results.append((article, urgency_label))
-
-    return results
+    logger.info(f"Cleared scores from {cleared} downvoted unread articles.")
+    return cleared
 
 
 async def get_previous_days_unread_articles(number_of_days: int = 14) -> list[Article]:
@@ -258,6 +260,33 @@ async def get_old_unread_articles(
     return [Article(**article) for article in data]
 
 
+async def get_unread_articles_by_age(
+    min_age_days: int, max_age_days: int
+) -> list[Article]:
+    """Get every unread article in the requested age range.
+
+    Args:
+        min_age_days: Youngest included article age in days.
+        max_age_days: Oldest excluded article age in days.
+
+    Returns:
+        Unread, non-downvoted, unstarred articles in the age range.
+    """
+    query = _get_query_from_file("get_unread_articles_by_age.sql")
+
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(
+            query,
+            {
+                "min_age_days": min_age_days,
+                "max_age_days": max_age_days,
+            },
+        )
+        data = await cur.fetchall()
+
+    return [Article(**article) for article in data]
+
+
 async def update_scores(
     article_ids: list[int], article_titles: list[str], scores: list[int]
 ) -> None:
@@ -269,30 +298,42 @@ async def update_scores(
         scores: List of scores to set for the articles.
 
     """
+    if len(article_ids) != len(scores):
+        raise ValueError("article_ids and scores must align")
+
     scores_query = _get_query_from_file("update_scores.sql")
 
     async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.executemany(
-            scores_query,
-            [
+        for start in range(0, len(article_ids), SCORE_UPDATE_BATCH_SIZE):
+            end = start + SCORE_UPDATE_BATCH_SIZE
+            rows = [
                 {"score": score, "int_id": int_id}
-                for score, int_id in zip(scores, article_ids)
-            ],
-        )
+                for score, int_id in zip(
+                    scores[start:end], article_ids[start:end], strict=True
+                )
+            ]
+            await cur.executemany(scores_query, rows)
+            await conn.commit()
+            logger.info(
+                f"Updated article scores {start + 1}-{min(end, len(article_ids))}/"
+                f"{len(article_ids)}."
+            )
 
 
 async def insert_model_eval(
     eval_date: datetime.date,
     model_name: str,
+    evaluation_model: str,
     training_counts: dict[str, int],
     eval_counts: dict[str, int],
-    metrics: dict[str, float],
+    metrics: Mapping[str, float | None],
 ) -> None:
     """Insert a model evaluation result.
 
     Args:
         eval_date: Date the evaluation ran.
-        model_name: Name of the evaluated model.
+        model_name: Name of the evaluated model section.
+        evaluation_model: Encoder and prediction algorithm used for evaluation.
         training_counts: Training sample counts by class.
         eval_counts: Evaluation sample counts by class.
         metrics: Classification metrics from the evaluation run.
@@ -306,15 +347,33 @@ async def insert_model_eval(
             {
                 "eval_date": eval_date,
                 "model_name": model_name,
+                "evaluation_model": evaluation_model,
                 "training": Jsonb(training_counts),
                 "eval_counts": Jsonb(eval_counts),
-                "metrics_accuracy": metrics["accuracy"],
-                "metrics_precision": metrics["precision"],
-                "metrics_recall": metrics["recall"],
-                "metrics_f1": metrics["f1"],
-                "metrics_roc_auc": metrics["roc_auc"],
-                "metrics_average_precision": metrics["average_precision"],
-                "metrics_log_loss": metrics["log_loss"],
+                "metrics_accuracy": metrics.get("accuracy"),
+                "metrics_precision": metrics.get(
+                    "precision", metrics.get("precision_at_50")
+                ),
+                "metrics_recall": metrics.get("recall"),
+                "metrics_f1": metrics.get("f1", metrics.get("macro_f1")),
+                "metrics_roc_auc": metrics.get(
+                    "roc_auc", metrics.get("long_lived_auc")
+                ),
+                "metrics_average_precision": metrics.get("average_precision"),
+                "metrics_log_loss": metrics.get("log_loss"),
+                "metrics_rps": metrics.get("rps"),
+                "metrics_weighted_kappa": metrics.get("weighted_kappa"),
+                "metrics_log_duration_mae": metrics.get("log_duration_mae"),
+                "metrics_super_important_average_precision": metrics.get(
+                    "super_important_average_precision"
+                ),
+                "metrics_relevance_average_precision": metrics.get(
+                    "relevance_average_precision"
+                ),
+                "metrics_recall_at_10": metrics.get("recall_at_10"),
+                "metrics_recall_at_25": metrics.get("recall_at_25"),
+                "metrics_recall_at_50": metrics.get("recall_at_50"),
+                "metrics_super_important_bonus": metrics.get("super_important_bonus"),
             },
         )
 
@@ -404,311 +463,5 @@ async def upsert_relevance_embeddings(
                     "embedding": _format_embedding_bytes(embedding),
                 }
                 for article_id, text_hash, embedding in rows
-            ],
-        )
-
-
-# WARNING: this returns a different article format than the other functions
-async def get_previous_days_articles_wo_time_sensitivity(
-    number_of_days: int = 14,
-) -> list[Article]:
-    query = _get_query_from_file("get_previous_days_wo_time_sensitivity_articles.sql")
-
-    async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.execute(
-            query,
-            {"number_of_days": number_of_days},
-        )
-        data = await cur.fetchall()
-
-    return [Article(**article) for article in data]
-
-
-async def register_time_sensitivity_for_articles(
-    time_sensitivities: list[TimeSensitivity],
-) -> None:
-    query = _get_query_from_file("register_time_sensitivity_for_articles.sql")
-
-    async with (
-        global_pool.connection() as conn,
-        conn.cursor() as cur,
-        cur.copy(query) as copy,
-    ):
-        for sensitivity in time_sensitivities:
-            row = (
-                sensitivity.article_id,
-                sensitivity.score,
-                sensitivity.confidence,
-                sensitivity.explanation,
-            )
-            await copy.write_row(row)
-
-
-# --- Simplified time sensitivity (Phase 2: decoder model labeling) ---
-
-
-async def get_articles_wo_simplified_time_sensitivity() -> list[Article]:
-    """Get articles from the last 6 months without a simplified time sensitivity score.
-
-    Filters to articles published within the last 6 months. Re-runnable: only
-    returns articles missing from time_sensitivity_simplified.
-
-    Returns:
-        Articles from the last 6 months without a simplified time sensitivity score.
-
-    """
-    query = _get_query_from_file("get_articles_wo_simplified_time_sensitivity.sql")
-
-    async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.execute(query)
-        data = await cur.fetchall()
-
-    return [Article(**article) for article in data]
-
-
-async def register_simplified_time_sensitivity(
-    time_sensitivities: list[SimplifiedTimeSensitivity],
-) -> None:
-    """Bulk insert simplified time sensitivity scores via COPY.
-
-    Args:
-        time_sensitivities: List of simplified time sensitivity results to insert.
-
-    """
-    query = _get_query_from_file("register_simplified_time_sensitivity.sql")
-
-    async with (
-        global_pool.connection() as conn,
-        conn.cursor() as cur,
-        cur.copy(query) as copy,
-    ):
-        for sensitivity in time_sensitivities:
-            row = (
-                sensitivity.article_id,
-                sensitivity.score,
-                sensitivity.explanation,
-            )
-            await copy.write_row(row)
-
-
-# --- Read-tagged urgency training data ---
-
-
-async def get_articles_with_simplified_time_sensitivity() -> list[tuple[Article, int]]:
-    """Get all articles with their simplified time sensitivity labels.
-
-    Legacy helper for the old urgency-training path. Returns article data joined
-    with the binary urgency label (0 or 1).
-
-    Returns:
-        List of (Article, urgency_label) tuples.
-
-    """
-    query = _get_query_from_file("get_articles_with_simplified_time_sensitivity.sql")
-
-    async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.execute(query)
-        data = await cur.fetchall()
-
-    results: list[tuple[Article, int]] = []
-    for row in data:
-        urgency_label = row.pop("urgency_label")
-        article = Article(**row)
-        results.append((article, urgency_label))
-
-    return results
-
-
-# --- Urgency inference caching ---
-
-
-async def get_articles_wo_urgency_inference(
-    number_of_days: int = 14,
-    model_key: str = "legacy-modernbert",
-) -> list[Article]:
-    """Get recent unread articles without a cached urgency score.
-
-    Legacy helper for callers that only want cache misses for one model key.
-
-    Args:
-        number_of_days: Number of days to look back for unread articles.
-
-    Returns:
-        List of unread articles without cached urgency scores.
-
-    """
-    query = _get_query_from_file("get_articles_wo_urgency_inference.sql")
-
-    async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.execute(
-            query,
-            {
-                "number_of_days": number_of_days,
-                "model_key": model_key,
-            },
-        )
-        data = await cur.fetchall()
-
-    return [Article(**article) for article in data]
-
-
-async def register_urgency_inference(
-    results: UrgencyInferenceResults,
-    model_key: str,
-) -> None:
-    """Insert or update urgency inference scores for one active model.
-
-    Args:
-        results: Urgency inference results containing article IDs and scores.
-        model_key: Cache key for the active urgency model.
-
-    """
-    if not results.article_ids:
-        logger.info(f"No urgency scores to cache for model_key={model_key}.")
-        return
-
-    query = _get_query_from_file("register_urgency_inference.sql")
-
-    logger.info(
-        f"Upserting {len(results.article_ids)} urgency scores for model_key={model_key}."
-    )
-
-    async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.executemany(
-            query,
-            [
-                {
-                    "article_id": article_id,
-                    "model_key": model_key,
-                    "urgency_score": score,
-                }
-                for article_id, score in zip(
-                    results.article_ids,
-                    results.urgency_scores,
-                )
-            ],
-        )
-    logger.info(
-        f"Upserted {len(results.article_ids)} urgency scores for model_key={model_key}."
-    )
-
-
-async def get_urgency_scores_for_articles(
-    article_ids: list[int],
-    model_key: str,
-) -> dict[int, float]:
-    """Fetch cached urgency scores for a set of articles.
-
-    Used by main.py to look up urgency probabilities for time-decay calculation.
-
-    Args:
-        article_ids: List of article IDs to look up.
-
-    Returns:
-        Dict mapping article_id to urgency_score (0.0 to 1.0).
-        Articles without a cached score are not included.
-
-    """
-    if not article_ids:
-        return {}
-
-    query = _get_query_from_file("get_urgency_scores_for_articles.sql")
-
-    async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.execute(
-            query,
-            {
-                "article_ids": article_ids,
-                "model_key": model_key,
-            },
-        )
-        data = await cur.fetchall()
-
-    return {row["article_id"]: row["urgency_score"] for row in data}
-
-
-# --- Urgency user tags ---
-#
-# Tagging system overview:
-#
-# Miniflux user tags "0-urgency" (evergreen) and "1-urgency" (time-sensitive)
-# are the trusted supervision signal for the urgency model.
-#
-# 1. VISIBILITY: The user can see the current urgency label in Miniflux.
-#
-# 2. TRAINING LABELS: Read articles tagged with these values are used as the
-#    ground-truth labels for urgency training.
-#
-# Manual corrections:
-#   The user can manually change an article's tag in Miniflux (e.g. switch
-#   "0-urgency" to "1-urgency"). The legacy auto-tagging helper below will
-#   never overwrite an existing urgency tag, so manual corrections are always
-#   preserved.
-#
-# Tag lifecycle:
-#   - Created by: user labeling in Miniflux, or legacy bootstrap scripts
-#   - Read by: make train_urgency
-#   - Modified by: user manually in Miniflux
-#   - Never overwritten by: the legacy tag-assignment helper below
-
-
-async def ensure_urgency_user_tags() -> dict[str, int]:
-    """Ensure urgency user tags exist and return their IDs.
-
-    Creates '0-urgency' and '1-urgency' tag definitions in the Miniflux
-    user_tags table for user_id=1, if they don't already exist. Then
-    fetches and returns their database IDs.
-
-    These tags are used as training labels by the urgency model. The helper is
-    still safe to call from legacy bootstrap workflows because it only inserts
-    missing tags and never overwrites an existing manual label.
-
-    Returns:
-        Dict mapping tag title to tag ID, e.g.
-        {'0-urgency': 42, '1-urgency': 43}.
-
-    """
-    upsert_query = _get_query_from_file("upsert_urgency_user_tags.sql")
-    select_query = _get_query_from_file("ensure_urgency_user_tags.sql")
-
-    async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.execute(upsert_query)
-        await cur.execute(select_query)
-        data = await cur.fetchall()
-
-    return {row["title"]: row["id"] for row in data}
-
-
-async def assign_urgency_tags_for_articles(
-    article_ids: list[int],
-    scores: list[int],
-    tag_ids: dict[str, int],
-) -> None:
-    """Assign urgency user tags to articles that don't already have one.
-
-    For each article, attempts to assign a "0-urgency" or "1-urgency" tag
-    based on the LLM-assigned score. If the article already has ANY urgency
-    tag (either "0-urgency" or "1-urgency"), the assignment is silently
-    skipped. This preserves manual corrections made by the user.
-
-    Args:
-        article_ids: List of article IDs to tag.
-        scores: Corresponding urgency scores (0 or 1) for each article.
-        tag_ids: Dict mapping tag title to tag ID (from ensure_urgency_user_tags).
-
-    """
-    query = _get_query_from_file("set_urgency_user_tag_for_entry.sql")
-
-    tag_id_by_score = {
-        0: tag_ids["0-urgency"],
-        1: tag_ids["1-urgency"],
-    }
-
-    async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.executemany(
-            query,
-            [
-                {"entry_id": article_id, "user_tag_id": tag_id_by_score[score]}
-                for article_id, score in zip(article_ids, scores)
             ],
         )

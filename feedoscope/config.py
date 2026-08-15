@@ -1,3 +1,4 @@
+import math
 import os
 from typing import Literal, cast
 
@@ -25,24 +26,19 @@ assert DATABASE_URL != "", "DATABASE_URL environment variable is not set"
 # colored console config, while production can point at the JSON logger config.
 LOGGING_CONFIG = os.getenv("LOGGING_CONFIG", "logging.conf")
 
-# Allow relevance or urgency training to fall back to CPU when CUDA is not
-# available. Defaults to false because training is expected to run on a GPU.
+# Allow training to fall back to CPU when CUDA is not available. Defaults to
+# false because training is expected to run on a GPU.
 ALLOW_TRAINING_WO_GPU = strtobool(os.getenv("ALLOW_TRAINING_WO_GPU", "False"))
 
 # Allow inference commands to run on CPU when CUDA is not available. Defaults to
 # false because production inference is expected to use a GPU.
 ALLOW_INFERENCE_WO_GPU = strtobool(os.getenv("ALLOW_INFERENCE_WO_GPU", "False"))
 
-# Extra sample weight applied to starred or upvoted articles during relevance
-# training so explicitly preferred articles influence the classifier more.
-EXCELLENT_WEIGHT = float(os.getenv("EXCELLENT_WEIGHT", "3.0"))
-
-# Half-life boundaries (in days) for urgency-based relevance decay.
-HALF_LIFE_EVERGREEN = float(os.getenv("HALF_LIFE_EVERGREEN", "120"))
-HALF_LIFE_URGENT = float(os.getenv("HALF_LIFE_URGENT", "10"))
+# Fixed half-life (in days) for the age-decay backend.
+AGE_DECAY_HALF_LIFE_DAYS = float(os.getenv("AGE_DECAY_HALF_LIFE_DAYS", "7"))
 assert (
-    0 < HALF_LIFE_URGENT <= HALF_LIFE_EVERGREEN
-), "HALF_LIFE_URGENT must be positive and no greater than HALF_LIFE_EVERGREEN"
+    math.isfinite(AGE_DECAY_HALF_LIFE_DAYS) and AGE_DECAY_HALF_LIFE_DAYS > 0
+), "AGE_DECAY_HALF_LIFE_DAYS must be finite and positive"
 
 # Size of the held-out validation set used by training and eval commands.
 # Production-style runs leave this at 0 to skip validation entirely.
@@ -50,6 +46,16 @@ VALIDATION_SIZE = int(os.getenv("VALIDATION_SIZE", "0"))
 
 # Hugging Face model ID for the frozen relevance embedding encoder.
 RELEVANCE_MODEL_NAME = os.getenv("RELEVANCE_MODEL_NAME", "google/embeddinggemma-300m")
+
+# Stable cache key for prompted shared embeddings. This is separate from the
+# Hugging Face source ID because the prompt changes vector values.
+RELEVANCE_EMBEDDING_KEY = os.getenv(
+    "RELEVANCE_EMBEDDING_KEY",
+    "google/embeddinggemma-300m-classification-v1",
+)
+RELEVANCE_EMBEDDING_PROMPT = os.getenv(
+    "RELEVANCE_EMBEDDING_PROMPT", "task: classification | query: "
+)
 
 # Maximum token budget used both when preparing relevance text and when encoding
 # it with the frozen Gemma model.
@@ -68,17 +74,23 @@ RELEVANCE_TEXT_PREP_MODE = cast(
 
 # Explicit cache-busting version for relevance text preparation. Bump this when
 # changing text-cleaning or truncation logic so stale embeddings are recomputed.
-RELEVANCE_PREP_VERSION = int(os.getenv("RELEVANCE_PREP_VERSION", "1"))
+RELEVANCE_PREP_VERSION = int(os.getenv("RELEVANCE_PREP_VERSION", "2"))
 
 # Batch size for frozen relevance embedding generation. Higher values can speed
 # up inference and training if enough GPU memory is available.
 RELEVANCE_ENCODER_BATCH_SIZE = int(os.getenv("RELEVANCE_ENCODER_BATCH_SIZE", "4"))
 
-# Inverse regularization strength for the logistic-regression relevance head.
-# This affects only the classifier fit, not the embedding cache itself.
+# Prompted relevance uses a deterministic small MLP. These values affect only
+# the relevance classifier artifact, not the shared embedding cache.
+RELEVANCE_MLP_HIDDEN_LAYER_SIZE = int(
+    os.getenv("RELEVANCE_MLP_HIDDEN_LAYER_SIZE", "64")
+)
+RELEVANCE_MLP_ALPHA = float(os.getenv("RELEVANCE_MLP_ALPHA", "0.0001"))
+RELEVANCE_MLP_MAX_ITER = int(os.getenv("RELEVANCE_MLP_MAX_ITER", "300"))
+# Weight for explicitly important articles during relevance MLP training.
+IMPORTANT_ARTICLE_WEIGHT = float(os.getenv("IMPORTANT_ARTICLE_WEIGHT", "20"))
+assert (
+    math.isfinite(IMPORTANT_ARTICLE_WEIGHT) and IMPORTANT_ARTICLE_WEIGHT >= 1
+), "IMPORTANT_ARTICLE_WEIGHT must be finite and at least 1"
+# Keep this legacy value for old standalone artifact compatibility only.
 RELEVANCE_LINEAR_C = float(os.getenv("RELEVANCE_LINEAR_C", "5.0"))
-
-# Inverse regularization strength for the logistic-regression urgency head.
-# Urgency intentionally shares the same embedding config as relevance for cache
-# reuse, but keeps its own classifier regularization.
-URGENCY_LINEAR_C = float(os.getenv("URGENCY_LINEAR_C", "1.0"))

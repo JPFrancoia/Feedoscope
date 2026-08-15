@@ -1,14 +1,17 @@
 import hashlib
-import json
 import logging
 import math
+import os
 from pathlib import Path
+import tempfile
+from typing import Any
 
 from huggingface_hub import snapshot_download
 from huggingface_hub.errors import GatedRepoError
 import joblib  # type: ignore[import-untyped]
 import numpy as np
 from sklearn.linear_model import LogisticRegression
+from sklearn.neural_network import MLPClassifier
 import torch
 from transformers import AutoModel, AutoTokenizer, PreTrainedTokenizerBase
 
@@ -20,6 +23,14 @@ logger = logging.getLogger(__name__)
 
 CLASSIFIER_FILENAME = "classifier.joblib"
 METADATA_FILENAME = "metadata.json"
+ARTIFACT_FILENAME = "relevance_mlp.joblib"
+ARTIFACT_VERSION = 4
+BACKEND = "embedding_prompted_mlp"
+LABEL_CONTRACT = {
+    "relevance_positive": "read and vote >= 0",
+    "relevance_negative": "vote = -1",
+}
+TRAIN_COUNT_KEYS = {"good", "bad"}
 ENCODER_CACHE_ROOT = Path("models/relevance_encoder")
 ENCODER_READY_FILENAME = ".snapshot_complete"
 
@@ -34,9 +45,33 @@ def _pipeline_title(pipeline_label: str) -> str:
     return _pipeline_name(pipeline_label).capitalize()
 
 
+def spread_relevance_score(score: float) -> float:
+    """Spread a final 0-100 score while preserving its ranking order."""
+    normalized = score / 100
+    if not 0 <= normalized <= 1:
+        raise ValueError("score must be between 0 and 100")
+    return (1 - math.cbrt(1 - normalized)) * 100
+
+
+def prepare_scores_for_storage(scores: list[float]) -> list[int]:
+    """Spread and round final scores for integer database storage."""
+    return [round(spread_relevance_score(score)) for score in scores]
+
+
 def get_encoder_cache_path() -> Path:
     """Return the shared on-disk cache path for the configured encoder."""
     return ENCODER_CACHE_ROOT / config.RELEVANCE_MODEL_NAME.replace("/", "--")
+
+
+def get_model_family_prefix() -> str:
+    """Return the versioned artifact family for relevance models."""
+    return (
+        f"relevance_{config.RELEVANCE_EMBEDDING_KEY.replace('/', '-')}_"
+        f"{config.RELEVANCE_MAX_LENGTH}_{config.RELEVANCE_TEXT_PREP_MODE}_"
+        f"p{config.RELEVANCE_PREP_VERSION}_prompted_mlp_"
+        f"h{config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE}_a{config.RELEVANCE_MLP_ALPHA}_"
+        f"iw{config.IMPORTANT_ARTICLE_WEIGHT}"
+    )
 
 
 def has_local_encoder_snapshot(encoder_path: Path) -> bool:
@@ -120,10 +155,11 @@ def load_encoder(
 def get_cache_config() -> dict[str, str | int]:
     """Return the configuration values that define the embedding output."""
     return {
-        "model_name": config.RELEVANCE_MODEL_NAME,
+        "model_name": config.RELEVANCE_EMBEDDING_KEY,
         "max_length": config.RELEVANCE_MAX_LENGTH,
         "text_prep_mode": config.RELEVANCE_TEXT_PREP_MODE,
         "prep_version": config.RELEVANCE_PREP_VERSION,
+        "prompt": config.RELEVANCE_EMBEDDING_PROMPT,
     }
 
 
@@ -151,13 +187,25 @@ def prepare_articles_text(
         f"Preparing {pipeline_name} text for {len(articles)} articles using "
         f"{config.RELEVANCE_TEXT_PREP_MODE}"
     )
-    texts = relevance_text.prepare_articles_text(
-        articles,
-        tokenizer=tokenizer,
-        max_length=config.RELEVANCE_MAX_LENGTH,
-        mode=config.RELEVANCE_TEXT_PREP_MODE,
-    )
-    logger.info(f"Prepared {pipeline_name} text for {len(texts)} articles")
+    prompt = config.RELEVANCE_EMBEDDING_PROMPT
+    prompt_tokens = len(tokenizer.encode(prompt, add_special_tokens=False))
+    article_budget = config.RELEVANCE_MAX_LENGTH - prompt_tokens
+    if article_budget <= 4:
+        raise RuntimeError("Relevance embedding prompt leaves no article token budget")
+    texts: list[str] = []
+    for start in range(0, len(articles), 1000):
+        texts.extend(
+            prompt + text
+            for text in relevance_text.prepare_articles_text(
+                articles[start : start + 1000],
+                tokenizer=tokenizer,
+                max_length=article_budget,
+                mode=config.RELEVANCE_TEXT_PREP_MODE,
+            )
+        )
+        logger.info(
+            f"Prepared {pipeline_name} text for {len(texts)}/{len(articles)} articles"
+        )
     return texts
 
 
@@ -191,6 +239,9 @@ async def encode_articles(
     text_hashes = [hash_prepared_text(text) for text in texts]
     article_ids = [article.article_id for article in articles]
     cache_config = get_cache_config()
+    logger.info(
+        f"Looking up {len(article_ids)} {_pipeline_name(pipeline_label)} embedding cache entries"
+    )
     cached = await dr.get_relevance_embeddings(
         article_ids=article_ids,
         model_name=str(cache_config["model_name"]),
@@ -298,65 +349,117 @@ def encode_texts(
     return np.concatenate(embeddings, axis=0)
 
 
-def build_sample_weights(articles: list[Article]) -> np.ndarray:
-    """Boost starred or upvoted articles using the configured weight."""
+def is_important(article: Article) -> bool:
+    """Return whether a read/good article received an explicit preference."""
+    return (
+        article.status == "read"
+        and article.vote >= 0
+        and (article.vote == 1 or article.starred)
+    )
+
+
+def build_relevance_sample_weights(articles: list[Article]) -> np.ndarray:
+    """Return MLP weights that emphasize explicitly preferred articles."""
     return np.array(
         [
-            config.EXCELLENT_WEIGHT if (article.vote == 1 or article.starred) else 1.0
+            config.IMPORTANT_ARTICLE_WEIGHT if is_important(article) else 1.0
             for article in articles
-        ],
-        dtype=float,
+        ]
     )
 
 
 def fit_classifier(
     embeddings: np.ndarray,
     labels: np.ndarray,
-    sample_weights: np.ndarray,
     pipeline_label: str = "relevance",
-) -> LogisticRegression:
-    """Fit the logistic-regression head on top of frozen embeddings."""
+    sample_weights: np.ndarray | None = None,
+) -> MLPClassifier:
+    """Fit the configured prompted-embedding relevance MLP head."""
     pipeline_name = _pipeline_name(pipeline_label)
     logger.info(
-        f"Fitting {pipeline_name} logistic regression on {len(labels)} rows with "
-        f"C={config.RELEVANCE_LINEAR_C}"
+        f"Fitting {pipeline_name} MLP on {len(labels)} rows with "
+        f"{config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE} hidden units"
     )
-    classifier = LogisticRegression(
-        max_iter=4000,
-        C=config.RELEVANCE_LINEAR_C,
+    classifier = MLPClassifier(
+        hidden_layer_sizes=(config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE,),
+        alpha=config.RELEVANCE_MLP_ALPHA,
+        early_stopping=True,
+        max_iter=config.RELEVANCE_MLP_MAX_ITER,
         random_state=42,
     )
-    classifier.fit(embeddings, labels, sample_weight=sample_weights)
-    logger.info(f"{_pipeline_title(pipeline_label)} logistic regression fit completed")
+    classifier.fit(  # type: ignore[call-arg]  # sklearn-stubs omit sklearn 1.7 support
+        embeddings,
+        labels,
+        sample_weight=sample_weights,
+    )
+    logger.info(f"{_pipeline_title(pipeline_label)} MLP fit completed")
     return classifier
 
 
-def save_artifact(
-    model_path: str,
-    classifier: LogisticRegression,
-    train_counts: dict[str, int],
-    pipeline_label: str = "relevance",
-) -> None:
-    """Persist the classifier and minimal metadata for later inference."""
-    pipeline_name = _pipeline_name(pipeline_label)
-    logger.info(f"Saving {pipeline_name} artifact to {model_path}")
-    path = Path(model_path)
-    path.mkdir(parents=True, exist_ok=True)
-
-    joblib.dump(classifier, path / CLASSIFIER_FILENAME)
-    metadata = {
-        "backend": "embedding_linear",
-        "model_name": config.RELEVANCE_MODEL_NAME,
-        "encoder_cache_path": str(get_encoder_cache_path()),
-        "max_length": config.RELEVANCE_MAX_LENGTH,
-        "text_prep_mode": config.RELEVANCE_TEXT_PREP_MODE,
-        "prep_version": config.RELEVANCE_PREP_VERSION,
-        "linear_c": config.RELEVANCE_LINEAR_C,
-        "batch_size": config.RELEVANCE_ENCODER_BATCH_SIZE,
+def build_metadata(train_counts: dict[str, int]) -> dict[str, object]:
+    """Build metadata that makes relevance artifacts safe to load."""
+    return {
+        "artifact_version": ARTIFACT_VERSION,
+        "backend": BACKEND,
+        "encoder": get_cache_config(),
+        "mlp_hidden_layer_size": config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE,
+        "mlp_alpha": config.RELEVANCE_MLP_ALPHA,
+        "mlp_max_iter": config.RELEVANCE_MLP_MAX_ITER,
+        "important_article_weight": config.IMPORTANT_ARTICLE_WEIGHT,
+        "label_contract": LABEL_CONTRACT,
         "train_counts": train_counts,
     }
-    (path / METADATA_FILENAME).write_text(json.dumps(metadata, indent=2) + "\n")
-    logger.info(f"Saved {pipeline_name} artifact to {model_path}")
+
+
+def save_relevance_artifact(
+    model_path: str,
+    relevance_classifier: MLPClassifier,
+    train_counts: dict[str, int],
+) -> None:
+    """Persist the relevance head and compatibility metadata together."""
+    path = Path(model_path)
+    path.mkdir(parents=True, exist_ok=True)
+    artifact = {
+        "relevance_classifier": relevance_classifier,
+        "metadata": build_metadata(train_counts),
+    }
+    destination = path / ARTIFACT_FILENAME
+    with tempfile.NamedTemporaryFile(dir=path, delete=False) as temporary:
+        temporary_path = Path(temporary.name)
+    try:
+        joblib.dump(artifact, temporary_path)
+        os.replace(temporary_path, destination)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    logger.info(f"Saved relevance artifact to {model_path}")
+
+
+def load_relevance_artifact(model_path: str) -> MLPClassifier:
+    """Load a compatible relevance artifact."""
+    artifact = joblib.load(Path(model_path) / ARTIFACT_FILENAME)
+    if not isinstance(artifact, dict):
+        raise RuntimeError("Relevance artifact is not compatible with this model.")
+    relevance_classifier = artifact.get("relevance_classifier")
+    metadata = artifact.get("metadata")
+    train_counts = metadata.get("train_counts") if isinstance(metadata, dict) else None
+    if (
+        not isinstance(relevance_classifier, MLPClassifier)
+        or not isinstance(metadata, dict)
+        or metadata.get("artifact_version") != ARTIFACT_VERSION
+        or metadata.get("backend") != BACKEND
+        or metadata.get("encoder") != get_cache_config()
+        or metadata.get("mlp_hidden_layer_size")
+        != config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE
+        or metadata.get("mlp_alpha") != config.RELEVANCE_MLP_ALPHA
+        or metadata.get("mlp_max_iter") != config.RELEVANCE_MLP_MAX_ITER
+        or metadata.get("important_article_weight") != config.IMPORTANT_ARTICLE_WEIGHT
+        or metadata.get("label_contract") != LABEL_CONTRACT
+        or not isinstance(train_counts, dict)
+        or set(train_counts) != TRAIN_COUNT_KEYS
+        or not all(isinstance(count, int) for count in train_counts.values())
+    ):
+        raise RuntimeError("Relevance artifact is not compatible with this model.")
+    return relevance_classifier
 
 
 def load_classifier(
@@ -370,11 +473,22 @@ def load_classifier(
     return joblib.load(Path(model_path) / CLASSIFIER_FILENAME)
 
 
+def predict_probabilities_from_embeddings(
+    embeddings: np.ndarray,
+    classifier: Any,
+) -> np.ndarray:
+    """Predict clipped positive-class probabilities from prepared embeddings."""
+    if not len(embeddings):
+        return np.array([], dtype=float)
+    probs = classifier.predict_proba(embeddings)[:, 1]
+    return np.clip(probs, 1e-7, 1 - 1e-7)
+
+
 async def predict_probabilities(
     articles: list[Article],
     tokenizer: PreTrainedTokenizerBase,
     model: torch.nn.Module,
-    classifier: LogisticRegression,
+    classifier: Any,
     device: torch.device,
     pipeline_label: str = "relevance",
 ) -> np.ndarray:
@@ -389,8 +503,7 @@ async def predict_probabilities(
         device,
         pipeline_label=pipeline_label,
     )
-    probs = classifier.predict_proba(embeddings)[:, 1]
-    return np.clip(probs, 1e-7, 1 - 1e-7)
+    return predict_probabilities_from_embeddings(embeddings, classifier)
 
 
 def peak_vram_gb() -> float:
