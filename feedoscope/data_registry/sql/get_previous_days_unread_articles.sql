@@ -1,5 +1,4 @@
--- Get unread articles from the previous X days for inference
--- In Miniflux: status='unread' AND vote != -1 AND score=0
+-- Get eligible unread articles that can still produce a positive stored score.
 select
     e.id as article_id,
     e.title,
@@ -21,6 +20,6 @@ where
     e.status = 'unread'
     and e.vote != -1  -- Exclude bad articles
     and e.starred = false
-    and e.published_at >= now() - interval '1 day' * %(number_of_days)s
+    and e.published_at > now() - interval '1 day' * %(number_of_days)s
 order by
     e.id asc;

@@ -3,6 +3,8 @@ import datetime
 from functools import lru_cache
 from importlib.resources import files
 import logging
+import math
+import re
 from typing import LiteralString, cast
 
 import numpy as np
@@ -17,6 +19,7 @@ from feedoscope.entities import Article
 logger = logging.getLogger(__name__)
 
 SCORE_UPDATE_BATCH_SIZE = 1000
+MODEL_EVAL_METRIC_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 # For explanation about type hinting, see:
@@ -212,18 +215,28 @@ async def clear_downvoted_unread_scores() -> int:
     return cleared
 
 
-async def get_previous_days_unread_articles(number_of_days: int = 14) -> list[Article]:
-    """Get unread articles from the previous X days.
+async def clear_expired_unread_scores(score_horizon_days: float) -> int:
+    """Clear positive scores from eligible articles beyond the score horizon."""
+    query = _get_query_from_file("clear_expired_unread_scores.sql")
 
-    This is used to fetch articles that are not read yet, but are still
-    within the last X days.
-    Only articles that are unread AND with a score of 0 are considered.
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(query, {"score_horizon_days": score_horizon_days})
+        cleared = cur.rowcount
+
+    logger.info(f"Cleared scores from {cleared} expired unread articles.")
+    return cleared
+
+
+async def get_previous_days_unread_articles(
+    number_of_days: float = 14,
+) -> list[Article]:
+    """Get eligible unread articles younger than the specified age.
 
     Args:
-        number_of_days: Number of days to look back for unread articles.
+        number_of_days: Maximum article age in days.
 
     Returns:
-        A list of unread articles from the previous X days.
+        Eligible unread articles younger than the maximum age.
 
     """
     query = _get_query_from_file("get_previous_days_unread_articles.sql")
@@ -233,26 +246,6 @@ async def get_previous_days_unread_articles(number_of_days: int = 14) -> list[Ar
             query,
             {
                 "number_of_days": number_of_days,
-            },
-        )
-        data = await cur.fetchall()
-
-    return [Article(**article) for article in data]
-
-
-async def get_old_unread_articles(
-    age_in_days: int = 30, max_age_in_days: int = 365, sampling: int = 1500
-) -> list[Article]:
-
-    query = _get_query_from_file("get_old_unread_articles.sql")
-
-    async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.execute(
-            query,
-            {
-                "age_in_days": age_in_days,
-                "max_age_in_days": max_age_in_days,
-                "sampling": sampling,
             },
         )
         data = await cur.fetchall()
@@ -320,6 +313,27 @@ async def update_scores(
             )
 
 
+def normalize_model_eval_metrics(
+    metrics: Mapping[str, float | None],
+) -> dict[str, float]:
+    """Return finite model metrics with canonical keys and no missing values."""
+    normalized: dict[str, float] = {}
+    for name, value in metrics.items():
+        if not MODEL_EVAL_METRIC_KEY_PATTERN.fullmatch(name):
+            raise ValueError(f"Invalid model metric key: {name!r}")
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(
+            value, (int, float, np.integer, np.floating)
+        ):
+            raise TypeError(f"Model metric {name!r} must be numeric")
+        metric_value = float(value)
+        if not math.isfinite(metric_value):
+            raise ValueError(f"Model metric {name!r} must be finite")
+        normalized[name] = metric_value
+    return normalized
+
+
 async def insert_model_eval(
     eval_date: datetime.date,
     model_name: str,
@@ -350,30 +364,7 @@ async def insert_model_eval(
                 "evaluation_model": evaluation_model,
                 "training": Jsonb(training_counts),
                 "eval_counts": Jsonb(eval_counts),
-                "metrics_accuracy": metrics.get("accuracy"),
-                "metrics_precision": metrics.get(
-                    "precision", metrics.get("precision_at_50")
-                ),
-                "metrics_recall": metrics.get("recall"),
-                "metrics_f1": metrics.get("f1", metrics.get("macro_f1")),
-                "metrics_roc_auc": metrics.get(
-                    "roc_auc", metrics.get("long_lived_auc")
-                ),
-                "metrics_average_precision": metrics.get("average_precision"),
-                "metrics_log_loss": metrics.get("log_loss"),
-                "metrics_rps": metrics.get("rps"),
-                "metrics_weighted_kappa": metrics.get("weighted_kappa"),
-                "metrics_log_duration_mae": metrics.get("log_duration_mae"),
-                "metrics_super_important_average_precision": metrics.get(
-                    "super_important_average_precision"
-                ),
-                "metrics_relevance_average_precision": metrics.get(
-                    "relevance_average_precision"
-                ),
-                "metrics_recall_at_10": metrics.get("recall_at_10"),
-                "metrics_recall_at_25": metrics.get("recall_at_25"),
-                "metrics_recall_at_50": metrics.get("recall_at_50"),
-                "metrics_super_important_bonus": metrics.get("super_important_bonus"),
+                "metrics": Jsonb(normalize_model_eval_metrics(metrics)),
             },
         )
 

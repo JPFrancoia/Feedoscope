@@ -6,7 +6,6 @@ import datetime
 import json
 import logging
 import os
-import random
 import shutil
 import time
 from typing import Any
@@ -26,7 +25,7 @@ logger = logging.getLogger(__name__)
 EVAL_RELEVANCE_PREFIX = "eval_relevance"
 EVAL_HISTORY_PATH = "models/eval_history.json"
 RELEVANCE_PRECISION_BUDGET = 50
-EVALUATION_MODEL = "EmbeddingGemma 300M prompted + MLP (AP + Precision@50)"
+EVALUATION_MODEL = "EmbeddingGemma 300M prompted + MLP (forward AP + Precision@50)"
 
 
 def _clean_stale_eval_dirs() -> None:
@@ -135,8 +134,32 @@ async def _run_relevance_inference(
     )
 
 
+def build_forward_holdout(
+    all_good: list[Article],
+    all_bad: list[Article],
+    validation_size: int,
+) -> tuple[
+    list[Article], list[Article], list[Article], list[Article], datetime.datetime
+]:
+    """Split older model-fit rows from a balanced newest-row holdout."""
+    if validation_size <= 0:
+        raise ValueError("validation_size must be positive")
+    if len(all_good) < validation_size or len(all_bad) < validation_size:
+        raise ValueError("each class must contain at least validation_size rows")
+
+    def article_order(article: Article) -> tuple[datetime.datetime, int]:
+        return article.date_entered, article.article_id
+
+    eval_good = sorted(all_good, key=article_order)[-validation_size:]
+    eval_bad = sorted(all_bad, key=article_order)[-validation_size:]
+    cutoff = min(article.date_entered for article in eval_good + eval_bad)
+    good_articles = [article for article in all_good if article.date_entered < cutoff]
+    bad_articles = [article for article in all_bad if article.date_entered < cutoff]
+    return good_articles, bad_articles, eval_good, eval_bad, cutoff
+
+
 async def eval_relevance(device: torch.device) -> None:
-    """Evaluate the Relevance model on a random balanced holdout."""
+    """Evaluate the Relevance model on a strict forward-time holdout."""
     validation_size = config.VALIDATION_SIZE
     logger.info(
         f"[Relevance] Starting evaluation with VALIDATION_SIZE={validation_size}"
@@ -152,16 +175,23 @@ async def eval_relevance(device: torch.device) -> None:
         )
         return
 
-    eval_good = random.sample(all_good, validation_size)
-    eval_bad = random.sample(all_bad, validation_size)
-    eval_good_ids = {article.article_id for article in eval_good}
-    eval_bad_ids = {article.article_id for article in eval_bad}
-    good_articles = [
-        article for article in all_good if article.article_id not in eval_good_ids
-    ]
-    bad_articles = [
-        article for article in all_bad if article.article_id not in eval_bad_ids
-    ]
+    good_articles, bad_articles, eval_good, eval_bad, cutoff = build_forward_holdout(
+        all_good,
+        all_bad,
+        validation_size,
+    )
+    if not good_articles or not bad_articles:
+        logger.warning(
+            f"[Relevance] No model-fit rows before forward cutoff {cutoff.isoformat()} "
+            f"(good={len(good_articles)}, bad={len(bad_articles)}). Skipping eval."
+        )
+        return
+
+    logger.info(
+        f"[Relevance] Forward cutoff={cutoff.isoformat()}, "
+        f"fit=({len(good_articles)} good, {len(bad_articles)} bad), "
+        f"eval=({len(eval_good)} good, {len(eval_bad)} bad)."
+    )
     model_path = f"models/{EVAL_RELEVANCE_PREFIX}"
 
     try:
@@ -204,7 +234,6 @@ async def main() -> None:
     if device.type != "cuda" and not config.ALLOW_TRAINING_WO_GPU:
         raise RuntimeError("GPU not available. Exiting")
 
-    random.seed(42)
     _clean_stale_eval_dirs()
     await dr.global_pool.open(wait=True)
     try:

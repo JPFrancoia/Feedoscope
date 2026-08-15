@@ -10,7 +10,7 @@ import pytest
 
 os.environ.setdefault("DATABASE_URL", "postgresql://test")
 
-from feedoscope import main
+from feedoscope import main, relevance_embedding
 from feedoscope.entities import Article, RelevanceInferenceResults
 
 
@@ -64,6 +64,21 @@ def test_invalid_half_life_is_rejected(half_life_days: float | None) -> None:
         )
 
 
+def test_score_horizon_matches_storage_rounding() -> None:
+    half_life_days = 7.0
+    score_horizon_days = main.calculate_score_horizon_days(half_life_days)
+    maximum_raw_score = 99.99999
+    one_second = 1 / 86_400
+
+    scores = [
+        maximum_raw_score * 2 ** (-score_horizon_days / half_life_days),
+        maximum_raw_score * 2 ** (-(score_horizon_days - one_second) / half_life_days),
+    ]
+
+    assert score_horizon_days == pytest.approx(42.4627922)
+    assert relevance_embedding.prepare_scores_for_storage(scores) == [0, 1]
+
+
 def test_age_decay_config_defaults_to_seven_days() -> None:
     env = os.environ.copy()
     env.pop("AGE_DECAY_HALF_LIFE_DAYS", None)
@@ -106,6 +121,10 @@ def test_main_scores_articles_with_fixed_age_decay(
         model_key="test",
     )
     update_scores = AsyncMock()
+    clear_expired_scores = AsyncMock()
+    get_articles = AsyncMock(
+        return_value=[article(datetime.now(timezone.utc) - timedelta(days=7))]
+    )
     monkeypatch.setattr(main.config, "AGE_DECAY_HALF_LIFE_DAYS", 7.0)
     monkeypatch.setattr(
         main.dr,
@@ -113,13 +132,8 @@ def test_main_scores_articles_with_fixed_age_decay(
         SimpleNamespace(open=AsyncMock(), close=AsyncMock()),
     )
     monkeypatch.setattr(main.dr, "clear_downvoted_unread_scores", AsyncMock())
-    monkeypatch.setattr(
-        main,
-        "get_articles_for_scoring",
-        AsyncMock(
-            return_value=[article(datetime.now(timezone.utc) - timedelta(days=7))]
-        ),
-    )
+    monkeypatch.setattr(main.dr, "clear_expired_unread_scores", clear_expired_scores)
+    monkeypatch.setattr(main, "get_articles_for_scoring", get_articles)
     monkeypatch.setattr(main.dr, "update_scores", update_scores)
     monkeypatch.setattr(
         main.llm_infer, "infer", AsyncMock(return_value=relevance_results)
@@ -127,6 +141,9 @@ def test_main_scores_articles_with_fixed_age_decay(
 
     asyncio.run(main.main())
 
+    score_horizon_days = main.calculate_score_horizon_days(7.0)
+    get_articles.assert_awaited_once_with(score_horizon_days)
+    clear_expired_scores.assert_awaited_once_with(score_horizon_days)
     update_scores.assert_awaited_once()
     assert update_scores.await_args is not None
     assert update_scores.await_args.kwargs["scores"] == [21]

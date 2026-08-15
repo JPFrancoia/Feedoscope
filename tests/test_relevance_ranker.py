@@ -273,10 +273,8 @@ def test_score_updates_commit_bounded_batches(
         )
 
 
-def test_downvoted_unread_scores_are_cleared(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    executed: list[str] = []
+def test_unread_score_cleanup_queries(monkeypatch: pytest.MonkeyPatch) -> None:
+    executed: list[tuple[str, dict[str, float] | None]] = []
 
     class Cursor(AbstractAsyncContextManager["Cursor"]):
         rowcount = 7
@@ -284,8 +282,12 @@ def test_downvoted_unread_scores_are_cleared(
         async def __aexit__(self, *args: object) -> None:
             return None
 
-        async def execute(self, query: str) -> None:
-            executed.append(query)
+        async def execute(
+            self,
+            query: str,
+            params: dict[str, float] | None = None,
+        ) -> None:
+            executed.append((query, params))
 
     class Connection(AbstractAsyncContextManager["Connection"]):
         async def __aexit__(self, *args: object) -> None:
@@ -302,4 +304,8 @@ def test_downvoted_unread_scores_are_cleared(
     monkeypatch.setattr(dr, "_get_query_from_file", lambda filename: filename)
 
     assert asyncio.run(dr.clear_downvoted_unread_scores()) == 7
-    assert executed == ["clear_downvoted_unread_scores.sql"]
+    assert asyncio.run(dr.clear_expired_unread_scores(42.5)) == 7
+    assert executed == [
+        ("clear_downvoted_unread_scores.sql", None),
+        ("clear_expired_unread_scores.sql", {"score_horizon_days": 42.5}),
+    ]

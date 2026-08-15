@@ -13,15 +13,6 @@ from feedoscope.utils import clean_title
 
 logger = logging.getLogger(__name__)
 
-# All articles that are more recent than this will be rescored at every inference run.
-LOOKBACK_DAYS = 40
-
-# We sample SAMPLING articles between LOOKBACK_DAYS and MAX_LOOKBACK_DAYS_SAMPLING
-# and we rescore them. This is to make sure these old-ish articles get rescored from
-# time to time, but we save some computing time.
-MAX_LOOKBACK_DAYS_SAMPLING = 365
-SAMPLING = 1500
-
 
 def validate_age_range(
     min_age_days: int | None,
@@ -59,6 +50,15 @@ def is_valid_half_life(half_life_days: float | None) -> bool:
     )
 
 
+def calculate_score_horizon_days(half_life_days: float) -> float:
+    """Return the maximum age that can produce a positive stored score."""
+    if not is_valid_half_life(half_life_days):
+        raise ValueError("half_life_days must be finite and positive")
+
+    minimum_positive_raw_score = 100 * (1 - (1 - 0.5 / 100) ** 3)
+    return half_life_days * math.log2(100 / minimum_positive_raw_score)
+
+
 def decay_relevance_score(
     original_score: float,
     date_entered: datetime,
@@ -75,15 +75,9 @@ def decay_relevance_score(
     return original_score * math.exp(-math.log(2) * days_passed / half_life_days)
 
 
-async def get_articles_for_scoring() -> list[Article]:
-    """Return recent unread articles plus a sample of older unread articles."""
-    recent_articles = await dr.get_previous_days_unread_articles(LOOKBACK_DAYS)
-    old_articles = await dr.get_old_unread_articles(
-        age_in_days=LOOKBACK_DAYS,
-        max_age_in_days=MAX_LOOKBACK_DAYS_SAMPLING,
-        sampling=SAMPLING,
-    )
-    return recent_articles + old_articles
+async def get_articles_for_scoring(score_horizon_days: float) -> list[Article]:
+    """Return unread articles that can still produce a positive stored score."""
+    return await dr.get_previous_days_unread_articles(score_horizon_days)
 
 
 async def main(
@@ -91,10 +85,11 @@ async def main(
     max_age_days: int | None = None,
 ) -> None:
     age_range = validate_age_range(min_age_days, max_age_days)
+    score_horizon_days = calculate_score_horizon_days(config.AGE_DECAY_HALF_LIFE_DAYS)
     init_logging(config.LOGGING_CONFIG)
     if age_range is None:
         logger.info(
-            f"Starting inference: lookback={LOOKBACK_DAYS}d, sampling={SAMPLING}, "
+            f"Starting inference: score horizon={score_horizon_days:.4f}d, "
             f"half-life={config.AGE_DECAY_HALF_LIFE_DAYS}d"
         )
     else:
@@ -108,13 +103,14 @@ async def main(
     try:
         await dr.clear_downvoted_unread_scores()
         if age_range is None:
-            articles = await get_articles_for_scoring()
+            articles = await get_articles_for_scoring(score_horizon_days)
         else:
             articles = await dr.get_unread_articles_by_age(*age_range)
             logger.info(
                 f"Fetched {len(articles)} unread articles aged "
                 f"[{age_range[0]}, {age_range[1]}) days."
             )
+        await dr.clear_expired_unread_scores(score_horizon_days)
         logger.info(f"Total articles to be scored: {len(articles)}")
 
         if not articles:

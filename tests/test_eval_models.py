@@ -4,10 +4,62 @@ import datetime
 from typing import Any
 
 import numpy as np
+from psycopg.types.json import Jsonb
 import pytest
 
 from feedoscope import eval_models
 from feedoscope.data_registry import data_registry as dr
+from feedoscope.entities import Article
+
+
+def article(article_id: int, date_entered: datetime.datetime, vote: int) -> Article:
+    return Article(
+        article_id=article_id,
+        title=f"Article {article_id}",
+        starred=False,
+        feed_name="Feed",
+        content="Content",
+        link=f"https://example.com/{article_id}",
+        author="Author",
+        date_entered=date_entered,
+        last_read=date_entered,
+        tags=[],
+        vote=vote,
+        status="read" if vote >= 0 else "unread",
+    )
+
+
+def test_forward_holdout_uses_a_strict_time_boundary() -> None:
+    start = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
+    all_good = [
+        article(index + 1, start + datetime.timedelta(days=index), 0)
+        for index in range(6)
+    ]
+    all_bad = [
+        article(index + 101, start + datetime.timedelta(days=index), -1)
+        for index in range(4)
+    ]
+
+    good_fit, bad_fit, eval_good, eval_bad, cutoff = eval_models.build_forward_holdout(
+        all_good, all_bad, validation_size=2
+    )
+
+    assert [item.article_id for item in good_fit] == [1, 2]
+    assert [item.article_id for item in bad_fit] == [101, 102]
+    assert [item.article_id for item in eval_good] == [5, 6]
+    assert [item.article_id for item in eval_bad] == [103, 104]
+    assert cutoff == start + datetime.timedelta(days=2)
+    cutoff_ids = {
+        item.article_id for item in all_good + all_bad if item.date_entered == cutoff
+    }
+    assert cutoff_ids == {3, 103}
+    assert cutoff_ids.isdisjoint(item.article_id for item in good_fit + bad_fit)
+    assert max(item.date_entered for item in good_fit + bad_fit) < min(
+        item.date_entered for item in eval_good + eval_bad
+    )
+    assert {item.article_id for item in good_fit + bad_fit}.isdisjoint(
+        item.article_id for item in eval_good + eval_bad
+    )
 
 
 def test_perfect_relevance_ranking_metrics() -> None:
@@ -70,10 +122,44 @@ def test_save_eval_results_persists_relevance_history(
 
     assert '"model": "Relevance"' in history_path.read_text()
     assert captured["model_name"] == "Relevance"
-    assert captured["evaluation_model"] == eval_models.EVALUATION_MODEL
+    assert captured["evaluation_model"] == (
+        "EmbeddingGemma 300M prompted + MLP (forward AP + Precision@50)"
+    )
 
 
-def test_insert_model_eval_maps_relevance_metrics(
+def test_model_eval_metrics_preserve_canonical_keys() -> None:
+    assert dr.normalize_model_eval_metrics(
+        {
+            "precision": 0.8,
+            "precision_at_50": 0.94,
+            "future_metric": 0.7,
+            "missing_metric": None,
+        }
+    ) == {
+        "precision": 0.8,
+        "precision_at_50": 0.94,
+        "future_metric": 0.7,
+    }
+
+
+@pytest.mark.parametrize("value", (float("nan"), float("inf"), float("-inf")))
+def test_model_eval_metrics_reject_non_finite_values(value: float) -> None:
+    with pytest.raises(ValueError, match="must be finite"):
+        dr.normalize_model_eval_metrics({"metric": value})
+
+
+@pytest.mark.parametrize("value", (True, "0.5"))
+def test_model_eval_metrics_reject_non_numeric_values(value: object) -> None:
+    with pytest.raises(TypeError, match="must be numeric"):
+        dr.normalize_model_eval_metrics({"metric": value})  # type: ignore[dict-item]
+
+
+def test_model_eval_metrics_reject_invalid_keys() -> None:
+    with pytest.raises(ValueError, match="Invalid model metric key"):
+        dr.normalize_model_eval_metrics({"Precision@50": 0.94})
+
+
+def test_insert_model_eval_persists_canonical_metrics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -110,7 +196,11 @@ def test_insert_model_eval_maps_relevance_metrics(
         )
     )
 
-    assert captured["metrics_precision"] == 0.94
-    assert captured["metrics_roc_auc"] == 0.5
-    assert captured["metrics_average_precision"] == 0.6
-    assert captured["metrics_rps"] is None
+    metrics = captured["metrics"]
+    assert isinstance(metrics, Jsonb)
+    assert metrics.obj == {
+        "roc_auc": 0.5,
+        "average_precision": 0.6,
+        "precision_at_50": 0.94,
+    }
+    assert not any(key.startswith("metrics_") for key in captured)
