@@ -11,7 +11,6 @@ from huggingface_hub.errors import GatedRepoError
 import joblib  # type: ignore[import-untyped]
 import numpy as np
 from sklearn.linear_model import LogisticRegression
-from sklearn.neural_network import MLPClassifier
 import torch
 from transformers import AutoModel, AutoTokenizer, PreTrainedTokenizerBase
 
@@ -21,11 +20,11 @@ from feedoscope.entities import Article
 
 logger = logging.getLogger(__name__)
 
-CLASSIFIER_FILENAME = "classifier.joblib"
-METADATA_FILENAME = "metadata.json"
-ARTIFACT_FILENAME = "relevance_mlp.joblib"
-ARTIFACT_VERSION = 4
-BACKEND = "embedding_prompted_mlp"
+ARTIFACT_FILENAME = "relevance_logistic.joblib"
+ARTIFACT_VERSION = 5
+BACKEND = "embedding_prompted_logistic"
+LINEAR_MAX_ITER = 4000
+LINEAR_RANDOM_STATE = 42
 LABEL_CONTRACT = {
     "relevance_positive": "read and vote >= 0",
     "relevance_negative": "vote = -1",
@@ -68,9 +67,8 @@ def get_model_family_prefix() -> str:
     return (
         f"relevance_{config.RELEVANCE_EMBEDDING_KEY.replace('/', '-')}_"
         f"{config.RELEVANCE_MAX_LENGTH}_{config.RELEVANCE_TEXT_PREP_MODE}_"
-        f"p{config.RELEVANCE_PREP_VERSION}_prompted_mlp_"
-        f"h{config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE}_a{config.RELEVANCE_MLP_ALPHA}_"
-        f"iw{config.IMPORTANT_ARTICLE_WEIGHT}"
+        f"p{config.RELEVANCE_PREP_VERSION}_prompted_logistic_"
+        f"c{config.RELEVANCE_LINEAR_C}_iw{config.IMPORTANT_ARTICLE_WEIGHT}"
     )
 
 
@@ -359,7 +357,7 @@ def is_important(article: Article) -> bool:
 
 
 def build_relevance_sample_weights(articles: list[Article]) -> np.ndarray:
-    """Return MLP weights that emphasize explicitly preferred articles."""
+    """Return weights that emphasize explicitly preferred articles."""
     return np.array(
         [
             config.IMPORTANT_ARTICLE_WEIGHT if is_important(article) else 1.0
@@ -373,26 +371,24 @@ def fit_classifier(
     labels: np.ndarray,
     pipeline_label: str = "relevance",
     sample_weights: np.ndarray | None = None,
-) -> MLPClassifier:
-    """Fit the configured prompted-embedding relevance MLP head."""
+) -> LogisticRegression:
+    """Fit the configured prompted-embedding relevance logistic head."""
     pipeline_name = _pipeline_name(pipeline_label)
     logger.info(
-        f"Fitting {pipeline_name} MLP on {len(labels)} rows with "
-        f"{config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE} hidden units"
+        f"Fitting {pipeline_name} logistic regression on {len(labels)} rows with "
+        f"C={config.RELEVANCE_LINEAR_C}"
     )
-    classifier = MLPClassifier(
-        hidden_layer_sizes=(config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE,),
-        alpha=config.RELEVANCE_MLP_ALPHA,
-        early_stopping=True,
-        max_iter=config.RELEVANCE_MLP_MAX_ITER,
-        random_state=42,
+    classifier = LogisticRegression(
+        C=config.RELEVANCE_LINEAR_C,
+        max_iter=LINEAR_MAX_ITER,
+        random_state=LINEAR_RANDOM_STATE,
     )
-    classifier.fit(  # type: ignore[call-arg]  # sklearn-stubs omit sklearn 1.7 support
+    classifier.fit(
         embeddings,
         labels,
         sample_weight=sample_weights,
     )
-    logger.info(f"{_pipeline_title(pipeline_label)} MLP fit completed")
+    logger.info(f"{_pipeline_title(pipeline_label)} logistic regression fit completed")
     return classifier
 
 
@@ -402,9 +398,7 @@ def build_metadata(train_counts: dict[str, int]) -> dict[str, object]:
         "artifact_version": ARTIFACT_VERSION,
         "backend": BACKEND,
         "encoder": get_cache_config(),
-        "mlp_hidden_layer_size": config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE,
-        "mlp_alpha": config.RELEVANCE_MLP_ALPHA,
-        "mlp_max_iter": config.RELEVANCE_MLP_MAX_ITER,
+        "linear_c": config.RELEVANCE_LINEAR_C,
         "important_article_weight": config.IMPORTANT_ARTICLE_WEIGHT,
         "label_contract": LABEL_CONTRACT,
         "train_counts": train_counts,
@@ -413,7 +407,7 @@ def build_metadata(train_counts: dict[str, int]) -> dict[str, object]:
 
 def save_relevance_artifact(
     model_path: str,
-    relevance_classifier: MLPClassifier,
+    relevance_classifier: LogisticRegression,
     train_counts: dict[str, int],
 ) -> None:
     """Persist the relevance head and compatibility metadata together."""
@@ -434,7 +428,7 @@ def save_relevance_artifact(
     logger.info(f"Saved relevance artifact to {model_path}")
 
 
-def load_relevance_artifact(model_path: str) -> MLPClassifier:
+def load_relevance_artifact(model_path: str) -> LogisticRegression:
     """Load a compatible relevance artifact."""
     artifact = joblib.load(Path(model_path) / ARTIFACT_FILENAME)
     if not isinstance(artifact, dict):
@@ -443,15 +437,12 @@ def load_relevance_artifact(model_path: str) -> MLPClassifier:
     metadata = artifact.get("metadata")
     train_counts = metadata.get("train_counts") if isinstance(metadata, dict) else None
     if (
-        not isinstance(relevance_classifier, MLPClassifier)
+        not isinstance(relevance_classifier, LogisticRegression)
         or not isinstance(metadata, dict)
         or metadata.get("artifact_version") != ARTIFACT_VERSION
         or metadata.get("backend") != BACKEND
         or metadata.get("encoder") != get_cache_config()
-        or metadata.get("mlp_hidden_layer_size")
-        != config.RELEVANCE_MLP_HIDDEN_LAYER_SIZE
-        or metadata.get("mlp_alpha") != config.RELEVANCE_MLP_ALPHA
-        or metadata.get("mlp_max_iter") != config.RELEVANCE_MLP_MAX_ITER
+        or metadata.get("linear_c") != config.RELEVANCE_LINEAR_C
         or metadata.get("important_article_weight") != config.IMPORTANT_ARTICLE_WEIGHT
         or metadata.get("label_contract") != LABEL_CONTRACT
         or not isinstance(train_counts, dict)
@@ -459,18 +450,14 @@ def load_relevance_artifact(model_path: str) -> MLPClassifier:
         or not all(isinstance(count, int) for count in train_counts.values())
     ):
         raise RuntimeError("Relevance artifact is not compatible with this model.")
+    classifier_params = relevance_classifier.get_params()
+    if (
+        classifier_params["C"] != config.RELEVANCE_LINEAR_C
+        or classifier_params["max_iter"] != LINEAR_MAX_ITER
+        or classifier_params["random_state"] != LINEAR_RANDOM_STATE
+    ):
+        raise RuntimeError("Relevance artifact is not compatible with this model.")
     return relevance_classifier
-
-
-def load_classifier(
-    model_path: str,
-    pipeline_label: str = "relevance",
-) -> LogisticRegression:
-    """Load a previously saved logistic-regression classifier."""
-    logger.info(
-        f"Loading {_pipeline_name(pipeline_label)} classifier from {model_path}"
-    )
-    return joblib.load(Path(model_path) / CLASSIFIER_FILENAME)
 
 
 def predict_probabilities_from_embeddings(

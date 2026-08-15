@@ -7,6 +7,7 @@ from typing import cast
 import joblib  # type: ignore[import-untyped]
 import numpy as np
 import pytest
+from sklearn.linear_model import LogisticRegression
 from sklearn.neural_network import MLPClassifier
 from transformers import PreTrainedTokenizerBase
 
@@ -72,12 +73,12 @@ def test_relevance_training_weights_important_rows(
     np.testing.assert_array_equal(sample_weights, [20.0, 1.0, 1.0])
 
 
-def test_relevance_mlp_receives_sample_weights(
+def test_relevance_logistic_regression_receives_sample_weights(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, np.ndarray | None] = {}
 
-    class RecordingMLP:
+    class RecordingLogisticRegression:
         def __init__(self, **_: object) -> None:
             pass
 
@@ -90,7 +91,11 @@ def test_relevance_mlp_receives_sample_weights(
             captured["sample_weight"] = sample_weight
 
     sample_weights = np.array([20.0, 1.0])
-    monkeypatch.setattr(relevance_embedding, "MLPClassifier", RecordingMLP)
+    monkeypatch.setattr(
+        relevance_embedding,
+        "LogisticRegression",
+        RecordingLogisticRegression,
+    )
 
     relevance_embedding.fit_classifier(
         np.array([[1.0], [2.0]]),
@@ -102,20 +107,26 @@ def test_relevance_mlp_receives_sample_weights(
     np.testing.assert_array_equal(captured["sample_weight"], sample_weights)
 
 
-def test_model_family_changes_with_important_article_weight(
+@pytest.mark.parametrize(
+    ("config_name", "value"),
+    (("IMPORTANT_ARTICLE_WEIGHT", 7), ("RELEVANCE_LINEAR_C", 1)),
+)
+def test_model_family_changes_with_classifier_config(
     monkeypatch: pytest.MonkeyPatch,
+    config_name: str,
+    value: float,
 ) -> None:
     original = relevance_embedding.get_model_family_prefix()
 
-    monkeypatch.setattr(relevance_embedding.config, "IMPORTANT_ARTICLE_WEIGHT", 7)
+    monkeypatch.setattr(relevance_embedding.config, config_name, value)
 
     assert relevance_embedding.get_model_family_prefix() != original
 
 
-def test_artifact_round_trip_and_rejects_old_shape(tmp_path: Path) -> None:
+def test_artifact_round_trip_and_rejects_incompatible_heads(tmp_path: Path) -> None:
     embeddings = np.array([[0.0], [1.0], [2.0], [3.0]])
     labels = np.array([0, 0, 1, 1])
-    relevance_classifier = MLPClassifier(random_state=42).fit(embeddings, labels)
+    relevance_classifier = relevance_embedding.fit_classifier(embeddings, labels)
 
     relevance_embedding.save_relevance_artifact(
         str(tmp_path),
@@ -129,12 +140,19 @@ def test_artifact_round_trip_and_rejects_old_shape(tmp_path: Path) -> None:
         relevance_classifier.predict_proba(embeddings),
     )
 
-    joblib.dump(
-        relevance_classifier,
-        tmp_path / relevance_embedding.ARTIFACT_FILENAME,
-    )
-    with pytest.raises(RuntimeError, match="not compatible"):
-        relevance_embedding.load_relevance_artifact(str(tmp_path))
+    for incompatible_classifier in (
+        LogisticRegression(random_state=42).fit(embeddings, labels),
+        MLPClassifier(random_state=42),
+    ):
+        joblib.dump(
+            {
+                "relevance_classifier": incompatible_classifier,
+                "metadata": relevance_embedding.build_metadata({"good": 2, "bad": 2}),
+            },
+            tmp_path / relevance_embedding.ARTIFACT_FILENAME,
+        )
+        with pytest.raises(RuntimeError, match="not compatible"):
+            relevance_embedding.load_relevance_artifact(str(tmp_path))
 
 
 def test_latest_model_skips_and_cleans_incomplete_training_run(

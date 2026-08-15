@@ -5,6 +5,7 @@ import os
 import time
 
 import numpy as np
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     average_precision_score,
     f1_score,
@@ -13,7 +14,6 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
-from sklearn.neural_network import MLPClassifier
 import torch
 from transformers import PreTrainedTokenizerBase
 
@@ -58,7 +58,7 @@ async def train_model(
     bad_articles: list[Article],
     model_path: str,
     device: torch.device,
-) -> tuple[torch.nn.Module, PreTrainedTokenizerBase, MLPClassifier]:
+) -> tuple[torch.nn.Module, PreTrainedTokenizerBase, LogisticRegression]:
     """Train the relevance head from one embedding matrix."""
     tokenizer, encoder = relevance_embedding.load_encoder(device)
     training_articles = good_articles + bad_articles
@@ -85,8 +85,8 @@ async def train_model(
         training_articles
     )
     logger.info(
-        f"Relevance MLP uses {config.IMPORTANT_ARTICLE_WEIGHT}x weights for "
-        f"{important_count} important articles."
+        f"Relevance logistic regression uses {config.IMPORTANT_ARTICLE_WEIGHT}x "
+        f"weights for {important_count} important articles."
     )
     relevance_classifier = relevance_embedding.fit_classifier(
         embeddings,

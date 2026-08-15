@@ -25,7 +25,10 @@ logger = logging.getLogger(__name__)
 EVAL_RELEVANCE_PREFIX = "eval_relevance"
 EVAL_HISTORY_PATH = "models/eval_history.json"
 RELEVANCE_PRECISION_BUDGET = 50
-EVALUATION_MODEL = "EmbeddingGemma 300M prompted + MLP (forward AP + Precision@50)"
+EVALUATION_MODEL = (
+    "EmbeddingGemma 300M prompted + weighted logistic regression "
+    "(forward AP + Precision@50)"
+)
 
 
 def _clean_stale_eval_dirs() -> None:

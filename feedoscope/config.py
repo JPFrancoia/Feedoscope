@@ -80,17 +80,13 @@ RELEVANCE_PREP_VERSION = int(os.getenv("RELEVANCE_PREP_VERSION", "2"))
 # up inference and training if enough GPU memory is available.
 RELEVANCE_ENCODER_BATCH_SIZE = int(os.getenv("RELEVANCE_ENCODER_BATCH_SIZE", "4"))
 
-# Prompted relevance uses a deterministic small MLP. These values affect only
-# the relevance classifier artifact, not the shared embedding cache.
-RELEVANCE_MLP_HIDDEN_LAYER_SIZE = int(
-    os.getenv("RELEVANCE_MLP_HIDDEN_LAYER_SIZE", "64")
-)
-RELEVANCE_MLP_ALPHA = float(os.getenv("RELEVANCE_MLP_ALPHA", "0.0001"))
-RELEVANCE_MLP_MAX_ITER = int(os.getenv("RELEVANCE_MLP_MAX_ITER", "300"))
-# Weight for explicitly important articles during relevance MLP training.
+# Prompted relevance uses deterministic weighted logistic regression. These
+# values affect only the relevance classifier artifact, not the embedding cache.
+RELEVANCE_LINEAR_C = float(os.getenv("RELEVANCE_LINEAR_C", "5.0"))
+assert (
+    math.isfinite(RELEVANCE_LINEAR_C) and RELEVANCE_LINEAR_C > 0
+), "RELEVANCE_LINEAR_C must be finite and positive"
 IMPORTANT_ARTICLE_WEIGHT = float(os.getenv("IMPORTANT_ARTICLE_WEIGHT", "20"))
 assert (
     math.isfinite(IMPORTANT_ARTICLE_WEIGHT) and IMPORTANT_ARTICLE_WEIGHT >= 1
 ), "IMPORTANT_ARTICLE_WEIGHT must be finite and at least 1"
-# Keep this legacy value for old standalone artifact compatibility only.
-RELEVANCE_LINEAR_C = float(os.getenv("RELEVANCE_LINEAR_C", "5.0"))
