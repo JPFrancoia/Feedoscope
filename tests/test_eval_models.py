@@ -123,7 +123,7 @@ def test_save_eval_results_persists_relevance_history(
     assert '"model": "Relevance"' in history_path.read_text()
     assert captured["model_name"] == "Relevance"
     assert captured["evaluation_model"] == (
-        "EmbeddingGemma 300M prompted + weighted logistic regression "
+        "EmbeddingGemma 300M title/body + Word TF-IDF + weighted logistic regression "
         "(forward AP + Precision@50)"
     )
 

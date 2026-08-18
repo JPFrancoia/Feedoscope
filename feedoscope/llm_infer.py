@@ -117,7 +117,7 @@ async def infer(recent_unread_articles: list[Article]) -> RelevanceInferenceResu
     )
     logger.info(f"Loading relevance artifact from {model_path}")
 
-    relevance_classifier = relevance_embedding.load_relevance_artifact(model_path)
+    relevance_model = relevance_embedding.load_relevance_artifact(model_path)
     # Load before cleanup so an interrupted training run cannot delete the last
     # working artifact just because it created a newer directory.
     find_latest_model(
@@ -126,14 +126,12 @@ async def infer(recent_unread_articles: list[Article]) -> RelevanceInferenceResu
         required_filename=relevance_embedding.ARTIFACT_FILENAME,
     )
     tokenizer, encoder = relevance_embedding.load_encoder(device)
-    embeddings = await relevance_embedding.encode_articles(
+    scores = await relevance_embedding.predict_probabilities(
         recent_unread_articles,
         tokenizer,
         encoder,
+        relevance_model,
         device,
-    )
-    scores = relevance_embedding.predict_probabilities_from_embeddings(
-        embeddings, relevance_classifier
     )
 
     return RelevanceInferenceResults(

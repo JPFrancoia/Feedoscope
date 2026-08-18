@@ -4,12 +4,14 @@ import math
 import os
 from pathlib import Path
 import tempfile
-from typing import Any
+from typing import Any, Literal, NamedTuple
 
 from huggingface_hub import snapshot_download
 from huggingface_hub.errors import GatedRepoError
 import joblib  # type: ignore[import-untyped]
 import numpy as np
+from scipy import sparse  # type: ignore[import-untyped]
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 import torch
 from transformers import AutoModel, AutoTokenizer, PreTrainedTokenizerBase
@@ -17,14 +19,26 @@ from transformers import AutoModel, AutoTokenizer, PreTrainedTokenizerBase
 from feedoscope import config, relevance_text
 from feedoscope.data_registry import data_registry as dr
 from feedoscope.entities import Article
+from feedoscope.utils import clean_title, strip_html_keep_text
 
 logger = logging.getLogger(__name__)
 
-ARTIFACT_FILENAME = "relevance_logistic.joblib"
-ARTIFACT_VERSION = 5
-BACKEND = "embedding_prompted_logistic"
+EmbeddingField = Literal["title", "body"]
+
+ARTIFACT_FILENAME = "relevance_title_body_word.joblib"
+ARTIFACT_VERSION = 6
+BACKEND = "embedding_title_body_word_logistic"
 LINEAR_MAX_ITER = 4000
 LINEAR_RANDOM_STATE = 42
+TITLE_MAX_LENGTH = 512
+EMBEDDING_FIELDS: tuple[EmbeddingField, ...] = ("title", "body")
+TFIDF_PARAMETERS = {
+    "ngram_range": (1, 2),
+    "min_df": 2,
+    "max_df": 0.98,
+    "sublinear_tf": True,
+}
+FEATURE_ORDER = ("title_embedding", "body_embedding", "title_word", "body_word")
 LABEL_CONTRACT = {
     "relevance_positive": "read and vote >= 0",
     "relevance_negative": "vote = -1",
@@ -32,6 +46,15 @@ LABEL_CONTRACT = {
 TRAIN_COUNT_KEYS = {"good", "bad"}
 ENCODER_CACHE_ROOT = Path("models/relevance_encoder")
 ENCODER_READY_FILENAME = ".snapshot_complete"
+
+
+class RelevanceModel(NamedTuple):
+    """Keep one classifier aligned with its text vectorizers and embeddings."""
+
+    classifier: LogisticRegression
+    title_vectorizer: TfidfVectorizer
+    body_vectorizer: TfidfVectorizer
+    embedding_dimensions: int
 
 
 def _pipeline_name(pipeline_label: str) -> str:
@@ -66,8 +89,8 @@ def get_model_family_prefix() -> str:
     """Return the versioned artifact family for relevance models."""
     return (
         f"relevance_{config.RELEVANCE_EMBEDDING_KEY.replace('/', '-')}_"
-        f"{config.RELEVANCE_MAX_LENGTH}_{config.RELEVANCE_TEXT_PREP_MODE}_"
-        f"p{config.RELEVANCE_PREP_VERSION}_prompted_logistic_"
+        f"title{TITLE_MAX_LENGTH}_body{config.RELEVANCE_MAX_LENGTH}_"
+        f"p{config.RELEVANCE_PREP_VERSION}_word12_logistic_"
         f"c{config.RELEVANCE_LINEAR_C}_iw{config.IMPORTANT_ARTICLE_WEIGHT}"
     )
 
@@ -150,15 +173,22 @@ def load_encoder(
     return tokenizer, model
 
 
-def get_cache_config() -> dict[str, str | int]:
-    """Return the configuration values that define the embedding output."""
+def get_cache_config(field: EmbeddingField) -> dict[str, str | int]:
+    """Return the configuration values that define one field embedding."""
     return {
         "model_name": config.RELEVANCE_EMBEDDING_KEY,
-        "max_length": config.RELEVANCE_MAX_LENGTH,
-        "text_prep_mode": config.RELEVANCE_TEXT_PREP_MODE,
+        "max_length": (
+            TITLE_MAX_LENGTH if field == "title" else config.RELEVANCE_MAX_LENGTH
+        ),
+        "text_prep_mode": field,
         "prep_version": config.RELEVANCE_PREP_VERSION,
         "prompt": config.RELEVANCE_EMBEDDING_PROMPT,
     }
+
+
+def get_tfidf_config() -> dict[str, object]:
+    """Return the fixed Word TF-IDF feature contract."""
+    return dict(TFIDF_PARAMETERS)
 
 
 def get_encoder_output_dim(model: torch.nn.Module) -> int:
@@ -176,33 +206,30 @@ def hash_prepared_text(text: str) -> str:
 
 def prepare_articles_text(
     articles: list[Article],
-    tokenizer: PreTrainedTokenizerBase,
+    field: EmbeddingField,
     pipeline_label: str = "relevance",
 ) -> list[str]:
-    """Prepare article text once before cache lookup or encoding."""
+    """Prepare one independent article field before cache lookup or encoding."""
     pipeline_name = _pipeline_name(pipeline_label)
-    logger.info(
-        f"Preparing {pipeline_name} text for {len(articles)} articles using "
-        f"{config.RELEVANCE_TEXT_PREP_MODE}"
-    )
+    logger.info(f"Preparing {pipeline_name} {field} text for {len(articles)} articles")
     prompt = config.RELEVANCE_EMBEDDING_PROMPT
-    prompt_tokens = len(tokenizer.encode(prompt, add_special_tokens=False))
-    article_budget = config.RELEVANCE_MAX_LENGTH - prompt_tokens
-    if article_budget <= 4:
-        raise RuntimeError("Relevance embedding prompt leaves no article token budget")
     texts: list[str] = []
     for start in range(0, len(articles), 1000):
-        texts.extend(
-            prompt + text
-            for text in relevance_text.prepare_articles_text(
-                articles[start : start + 1000],
-                tokenizer=tokenizer,
-                max_length=article_budget,
-                mode=config.RELEVANCE_TEXT_PREP_MODE,
-            )
-        )
+        batch = articles[start : start + 1000]
+        if field == "title":
+            prepared = [
+                relevance_text.prepare_single_blob(article.title, "")
+                for article in batch
+            ]
+        else:
+            prepared = [
+                relevance_text.prepare_single_blob("", article.content)
+                for article in batch
+            ]
+        texts.extend(prompt + text for text in prepared)
         logger.info(
-            f"Prepared {pipeline_name} text for {len(texts)}/{len(articles)} articles"
+            f"Prepared {pipeline_name} {field} text for "
+            f"{len(texts)}/{len(articles)} articles"
         )
     return texts
 
@@ -223,20 +250,21 @@ async def encode_articles(
     tokenizer: PreTrainedTokenizerBase,
     model: torch.nn.Module,
     device: torch.device,
+    field: EmbeddingField,
     pipeline_label: str = "relevance",
 ) -> np.ndarray:
-    """Prepare article text, reuse cached vectors, and encode only misses."""
+    """Prepare one article field, reuse cached vectors, and encode only misses."""
     if not articles:
         return np.empty((0, get_encoder_output_dim(model)), dtype=np.float32)
 
     texts = prepare_articles_text(
         articles,
-        tokenizer,
+        field,
         pipeline_label=pipeline_label,
     )
     text_hashes = [hash_prepared_text(text) for text in texts]
     article_ids = [article.article_id for article in articles]
-    cache_config = get_cache_config()
+    cache_config = get_cache_config(field)
     logger.info(
         f"Looking up {len(article_ids)} {_pipeline_name(pipeline_label)} embedding cache entries"
     )
@@ -286,6 +314,7 @@ async def encode_articles(
             tokenizer,
             model,
             device,
+            max_length=int(cache_config["max_length"]),
             pipeline_label=pipeline_label,
         )
         upsert_rows: list[tuple[int, str, np.ndarray]] = []
@@ -309,11 +338,39 @@ async def encode_articles(
     return np.stack([embedding for embedding in results if embedding is not None])
 
 
+async def encode_article_fields(
+    articles: list[Article],
+    tokenizer: PreTrainedTokenizerBase,
+    model: torch.nn.Module,
+    device: torch.device,
+    pipeline_label: str = "relevance",
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return aligned title and body embeddings for one article batch."""
+    title_embeddings = await encode_articles(
+        articles,
+        tokenizer,
+        model,
+        device,
+        field="title",
+        pipeline_label=pipeline_label,
+    )
+    body_embeddings = await encode_articles(
+        articles,
+        tokenizer,
+        model,
+        device,
+        field="body",
+        pipeline_label=pipeline_label,
+    )
+    return title_embeddings, body_embeddings
+
+
 def encode_texts(
     texts: list[str],
     tokenizer: PreTrainedTokenizerBase,
     model: torch.nn.Module,
     device: torch.device,
+    max_length: int,
     pipeline_label: str = "relevance",
 ) -> np.ndarray:
     """Encode raw text batches into normalized dense vectors."""
@@ -335,7 +392,7 @@ def encode_texts(
                 batch,
                 padding=True,
                 truncation=True,
-                max_length=config.RELEVANCE_MAX_LENGTH,
+                max_length=max_length,
                 return_tensors="pt",
             )
             inputs = {key: value.to(device) for key, value in inputs.items()}
@@ -366,13 +423,71 @@ def build_relevance_sample_weights(articles: list[Article]) -> np.ndarray:
     )
 
 
+def build_tfidf_vectorizer() -> TfidfVectorizer:
+    """Create one unfitted vectorizer with the tested feature contract."""
+    return TfidfVectorizer(
+        ngram_range=(1, 2),
+        min_df=2,
+        max_df=0.98,
+        sublinear_tf=True,
+    )
+
+
+def _word_texts(articles: list[Article], field: EmbeddingField) -> list[str]:
+    """Prepare title or body text for Word TF-IDF."""
+    if field == "title":
+        return [clean_title(article.title) for article in articles]
+    return [strip_html_keep_text(article.content) for article in articles]
+
+
+def build_features(
+    articles: list[Article],
+    title_embeddings: np.ndarray,
+    body_embeddings: np.ndarray,
+    title_vectorizer: TfidfVectorizer,
+    body_vectorizer: TfidfVectorizer,
+    fit_vectorizers: bool = False,
+    embedding_dimensions: int | None = None,
+) -> sparse.csr_matrix:
+    """Build aligned title, body, title-word, and body-word feature blocks."""
+    title_embeddings = np.asarray(title_embeddings, dtype=np.float32)
+    body_embeddings = np.asarray(body_embeddings, dtype=np.float32)
+    if (
+        title_embeddings.ndim != 2
+        or body_embeddings.ndim != 2
+        or title_embeddings.shape != body_embeddings.shape
+        or len(title_embeddings) != len(articles)
+        or not np.isfinite(title_embeddings).all()
+        or not np.isfinite(body_embeddings).all()
+    ):
+        raise ValueError("Title and body embeddings must be finite and aligned")
+    if (
+        embedding_dimensions is not None
+        and title_embeddings.shape[1] != embedding_dimensions
+    ):
+        raise ValueError("Embedding dimensions do not match the relevance artifact")
+
+    transform = "fit_transform" if fit_vectorizers else "transform"
+    title_words = getattr(title_vectorizer, transform)(_word_texts(articles, "title"))
+    body_words = getattr(body_vectorizer, transform)(_word_texts(articles, "body"))
+    return sparse.hstack(
+        (
+            sparse.csr_matrix(title_embeddings),
+            sparse.csr_matrix(body_embeddings),
+            title_words,
+            body_words,
+        ),
+        format="csr",
+    )
+
+
 def fit_classifier(
-    embeddings: np.ndarray,
+    features: sparse.csr_matrix,
     labels: np.ndarray,
     pipeline_label: str = "relevance",
     sample_weights: np.ndarray | None = None,
 ) -> LogisticRegression:
-    """Fit the configured prompted-embedding relevance logistic head."""
+    """Fit the configured title/body plus Word TF-IDF logistic head."""
     pipeline_name = _pipeline_name(pipeline_label)
     logger.info(
         f"Fitting {pipeline_name} logistic regression on {len(labels)} rows with "
@@ -384,7 +499,7 @@ def fit_classifier(
         random_state=LINEAR_RANDOM_STATE,
     )
     classifier.fit(
-        embeddings,
+        features,
         labels,
         sample_weight=sample_weights,
     )
@@ -392,12 +507,48 @@ def fit_classifier(
     return classifier
 
 
-def build_metadata(train_counts: dict[str, int]) -> dict[str, object]:
+def fit_relevance_model(
+    articles: list[Article],
+    title_embeddings: np.ndarray,
+    body_embeddings: np.ndarray,
+    labels: np.ndarray,
+    sample_weights: np.ndarray,
+) -> RelevanceModel:
+    """Fit both Word TF-IDF blocks and the weighted logistic classifier."""
+    title_vectorizer = build_tfidf_vectorizer()
+    body_vectorizer = build_tfidf_vectorizer()
+    features = build_features(
+        articles,
+        title_embeddings,
+        body_embeddings,
+        title_vectorizer,
+        body_vectorizer,
+        fit_vectorizers=True,
+    )
+    classifier = fit_classifier(
+        features,
+        labels,
+        sample_weights=sample_weights,
+    )
+    return RelevanceModel(
+        classifier,
+        title_vectorizer,
+        body_vectorizer,
+        int(title_embeddings.shape[1]),
+    )
+
+
+def build_metadata(
+    train_counts: dict[str, int], embedding_dimensions: int
+) -> dict[str, object]:
     """Build metadata that makes relevance artifacts safe to load."""
     return {
         "artifact_version": ARTIFACT_VERSION,
         "backend": BACKEND,
-        "encoder": get_cache_config(),
+        "encoders": {field: get_cache_config(field) for field in EMBEDDING_FIELDS},
+        "tfidf": get_tfidf_config(),
+        "feature_order": FEATURE_ORDER,
+        "embedding_dimensions": embedding_dimensions,
         "linear_c": config.RELEVANCE_LINEAR_C,
         "important_article_weight": config.IMPORTANT_ARTICLE_WEIGHT,
         "label_contract": LABEL_CONTRACT,
@@ -407,15 +558,17 @@ def build_metadata(train_counts: dict[str, int]) -> dict[str, object]:
 
 def save_relevance_artifact(
     model_path: str,
-    relevance_classifier: LogisticRegression,
+    relevance_model: RelevanceModel,
     train_counts: dict[str, int],
 ) -> None:
-    """Persist the relevance head and compatibility metadata together."""
+    """Persist the complete relevance model and compatibility metadata."""
     path = Path(model_path)
     path.mkdir(parents=True, exist_ok=True)
     artifact = {
-        "relevance_classifier": relevance_classifier,
-        "metadata": build_metadata(train_counts),
+        "relevance_classifier": relevance_model.classifier,
+        "title_vectorizer": relevance_model.title_vectorizer,
+        "body_vectorizer": relevance_model.body_vectorizer,
+        "metadata": build_metadata(train_counts, relevance_model.embedding_dimensions),
     }
     destination = path / ARTIFACT_FILENAME
     with tempfile.NamedTemporaryFile(dir=path, delete=False) as temporary:
@@ -428,20 +581,43 @@ def save_relevance_artifact(
     logger.info(f"Saved relevance artifact to {model_path}")
 
 
-def load_relevance_artifact(model_path: str) -> LogisticRegression:
-    """Load a compatible relevance artifact."""
+def _vectorizer_is_compatible(vectorizer: object) -> bool:
+    if not isinstance(vectorizer, TfidfVectorizer):
+        return False
+    params = vectorizer.get_params()
+    return (
+        all(params[name] == value for name, value in TFIDF_PARAMETERS.items())
+        and hasattr(vectorizer, "vocabulary_")
+        and hasattr(vectorizer, "idf_")
+    )
+
+
+def load_relevance_artifact(model_path: str) -> RelevanceModel:
+    """Load a compatible title/body plus Word TF-IDF artifact."""
     artifact = joblib.load(Path(model_path) / ARTIFACT_FILENAME)
     if not isinstance(artifact, dict):
         raise RuntimeError("Relevance artifact is not compatible with this model.")
     relevance_classifier = artifact.get("relevance_classifier")
+    title_vectorizer = artifact.get("title_vectorizer")
+    body_vectorizer = artifact.get("body_vectorizer")
     metadata = artifact.get("metadata")
     train_counts = metadata.get("train_counts") if isinstance(metadata, dict) else None
+    embedding_dimensions = (
+        metadata.get("embedding_dimensions") if isinstance(metadata, dict) else None
+    )
     if (
         not isinstance(relevance_classifier, LogisticRegression)
+        or not _vectorizer_is_compatible(title_vectorizer)
+        or not _vectorizer_is_compatible(body_vectorizer)
         or not isinstance(metadata, dict)
         or metadata.get("artifact_version") != ARTIFACT_VERSION
         or metadata.get("backend") != BACKEND
-        or metadata.get("encoder") != get_cache_config()
+        or metadata.get("encoders")
+        != {field: get_cache_config(field) for field in EMBEDDING_FIELDS}
+        or metadata.get("tfidf") != get_tfidf_config()
+        or metadata.get("feature_order") != FEATURE_ORDER
+        or not isinstance(embedding_dimensions, int)
+        or embedding_dimensions <= 0
         or metadata.get("linear_c") != config.RELEVANCE_LINEAR_C
         or metadata.get("important_article_weight") != config.IMPORTANT_ARTICLE_WEIGHT
         or metadata.get("label_contract") != LABEL_CONTRACT
@@ -451,23 +627,37 @@ def load_relevance_artifact(model_path: str) -> LogisticRegression:
     ):
         raise RuntimeError("Relevance artifact is not compatible with this model.")
     classifier_params = relevance_classifier.get_params()
+    expected_features = (
+        2 * embedding_dimensions
+        + len(title_vectorizer.vocabulary_)  # type: ignore[union-attr]
+        + len(body_vectorizer.vocabulary_)  # type: ignore[union-attr]
+    )
     if (
         classifier_params["C"] != config.RELEVANCE_LINEAR_C
         or classifier_params["max_iter"] != LINEAR_MAX_ITER
         or classifier_params["random_state"] != LINEAR_RANDOM_STATE
+        or getattr(relevance_classifier, "n_features_in_", None) != expected_features
     ):
         raise RuntimeError("Relevance artifact is not compatible with this model.")
-    return relevance_classifier
+    assert isinstance(title_vectorizer, TfidfVectorizer)
+    assert isinstance(body_vectorizer, TfidfVectorizer)
+    assert isinstance(embedding_dimensions, int)
+    return RelevanceModel(
+        relevance_classifier,
+        title_vectorizer,
+        body_vectorizer,
+        embedding_dimensions,
+    )
 
 
-def predict_probabilities_from_embeddings(
-    embeddings: np.ndarray,
+def predict_probabilities_from_features(
+    features: sparse.csr_matrix,
     classifier: Any,
 ) -> np.ndarray:
-    """Predict clipped positive-class probabilities from prepared embeddings."""
-    if not len(embeddings):
+    """Predict clipped positive-class probabilities from prepared features."""
+    if not features.shape[0]:
         return np.array([], dtype=float)
-    probs = classifier.predict_proba(embeddings)[:, 1]
+    probs = classifier.predict_proba(features)[:, 1]
     return np.clip(probs, 1e-7, 1 - 1e-7)
 
 
@@ -475,7 +665,7 @@ async def predict_probabilities(
     articles: list[Article],
     tokenizer: PreTrainedTokenizerBase,
     model: torch.nn.Module,
-    classifier: Any,
+    relevance_model: RelevanceModel,
     device: torch.device,
     pipeline_label: str = "relevance",
 ) -> np.ndarray:
@@ -483,14 +673,22 @@ async def predict_probabilities(
     if not articles:
         return np.array([], dtype=float)
 
-    embeddings = await encode_articles(
+    title_embeddings, body_embeddings = await encode_article_fields(
         articles,
         tokenizer,
         model,
         device,
         pipeline_label=pipeline_label,
     )
-    return predict_probabilities_from_embeddings(embeddings, classifier)
+    features = build_features(
+        articles,
+        title_embeddings,
+        body_embeddings,
+        relevance_model.title_vectorizer,
+        relevance_model.body_vectorizer,
+        embedding_dimensions=relevance_model.embedding_dimensions,
+    )
+    return predict_probabilities_from_features(features, relevance_model.classifier)
 
 
 def peak_vram_gb() -> float:

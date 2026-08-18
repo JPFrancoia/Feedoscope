@@ -26,7 +26,7 @@ EVAL_RELEVANCE_PREFIX = "eval_relevance"
 EVAL_HISTORY_PATH = "models/eval_history.json"
 RELEVANCE_PRECISION_BUDGET = 50
 EVALUATION_MODEL = (
-    "EmbeddingGemma 300M prompted + weighted logistic regression "
+    "EmbeddingGemma 300M title/body + Word TF-IDF + weighted logistic regression "
     "(forward AP + Precision@50)"
 )
 

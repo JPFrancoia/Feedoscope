@@ -2,42 +2,48 @@ import asyncio
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import joblib  # type: ignore[import-untyped]
 import numpy as np
 import pytest
-from sklearn.linear_model import LogisticRegression
-from sklearn.neural_network import MLPClassifier
-from transformers import PreTrainedTokenizerBase
 
 from feedoscope import llm_infer, relevance_embedding
 from feedoscope.data_registry import data_registry as dr
 from feedoscope.entities import Article
 
 
-def test_prompted_embedding_key_and_text_are_distinct(
+def test_title_and_body_embedding_contracts_are_distinct(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    tokenizer = cast(
-        PreTrainedTokenizerBase,
-        SimpleNamespace(encode=lambda text, **_: text.split()),
-    )
+    article = cast(Article, SimpleNamespace(title="Title", content="Body"))
     monkeypatch.setattr(
         relevance_embedding.relevance_text,
-        "prepare_articles_text",
-        lambda *_, **kwargs: [f"article-budget-{kwargs['max_length']}"],
+        "prepare_single_blob",
+        lambda title, body: f"{title}|{body}",
     )
 
-    cache = relevance_embedding.get_cache_config()
-    texts = relevance_embedding.prepare_articles_text(
-        [cast(Article, SimpleNamespace())],
-        tokenizer,
-    )
+    title_cache = relevance_embedding.get_cache_config("title")
+    body_cache = relevance_embedding.get_cache_config("body")
 
-    assert cache["model_name"] == "google/embeddinggemma-300m-classification-v1"
-    assert cache["prompt"] == "task: classification | query: "
-    assert texts == ["task: classification | query: article-budget-2044"]
+    assert title_cache == {
+        "model_name": "google/embeddinggemma-300m-classification-v1",
+        "max_length": 512,
+        "text_prep_mode": "title",
+        "prep_version": 2,
+        "prompt": "task: classification | query: ",
+    }
+    assert body_cache == {
+        **title_cache,
+        "max_length": 2048,
+        "text_prep_mode": "body",
+    }
+    assert relevance_embedding.prepare_articles_text([article], "title") == [
+        "task: classification | query: Title|"
+    ]
+    assert relevance_embedding.prepare_articles_text([article], "body") == [
+        "task: classification | query: |Body"
+    ]
 
 
 def test_explicit_preference_label_uses_star_or_upvote() -> None:
@@ -56,6 +62,74 @@ def test_explicit_preference_label_uses_star_or_upvote() -> None:
     assert not relevance_embedding.is_important(
         cast(Article, SimpleNamespace(status="unread", vote=1, starred=False))
     )
+
+
+def test_field_encoder_requests_title_then_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fields: list[str] = []
+
+    async def encode(*_: object, **kwargs: object) -> np.ndarray:
+        fields.append(cast(str, kwargs["field"]))
+        return np.array([[1.0, 0.0]])
+
+    monkeypatch.setattr(relevance_embedding, "encode_articles", encode)
+
+    title, body = asyncio.run(
+        relevance_embedding.encode_article_fields(
+            [cast(Article, SimpleNamespace())],
+            cast(Any, SimpleNamespace()),
+            cast(Any, SimpleNamespace()),
+            cast(Any, SimpleNamespace()),
+        )
+    )
+
+    assert fields == ["title", "body"]
+    np.testing.assert_array_equal(title, body)
+
+
+def test_word_vocabularies_fit_only_training_text() -> None:
+    fit_articles = [
+        cast(
+            Article,
+            SimpleNamespace(
+                title=f"shared {'bad' if index < 2 else 'good'}",
+                content=f"common {'reject' if index < 2 else 'accept'}",
+            ),
+        )
+        for index in range(4)
+    ]
+    title_vectorizer = relevance_embedding.build_tfidf_vectorizer()
+    body_vectorizer = relevance_embedding.build_tfidf_vectorizer()
+    embeddings = np.ones((4, 2), dtype=np.float32)
+    relevance_embedding.build_features(
+        fit_articles,
+        embeddings,
+        embeddings,
+        title_vectorizer,
+        body_vectorizer,
+        fit_vectorizers=True,
+    )
+    title_vocabulary = dict(title_vectorizer.vocabulary_)
+    body_vocabulary = dict(body_vectorizer.vocabulary_)
+    evaluation = [
+        cast(
+            Article,
+            SimpleNamespace(title="futuretitle", content="futurebody"),
+        )
+    ]
+
+    features = relevance_embedding.build_features(
+        evaluation,
+        np.ones((1, 2), dtype=np.float32),
+        np.ones((1, 2), dtype=np.float32),
+        title_vectorizer,
+        body_vectorizer,
+    )
+
+    assert title_vectorizer.vocabulary_ == title_vocabulary
+    assert body_vectorizer.vocabulary_ == body_vocabulary
+    assert features.shape[1] == 4 + len(title_vocabulary) + len(body_vocabulary)
 
 
 def test_relevance_training_weights_important_rows(
@@ -123,36 +197,69 @@ def test_model_family_changes_with_classifier_config(
     assert relevance_embedding.get_model_family_prefix() != original
 
 
-def test_artifact_round_trip_and_rejects_incompatible_heads(tmp_path: Path) -> None:
-    embeddings = np.array([[0.0], [1.0], [2.0], [3.0]])
+def test_artifact_round_trip_and_rejects_incompatible_models(tmp_path: Path) -> None:
+    articles = [
+        cast(
+            Article,
+            SimpleNamespace(
+                title=f"{'bad' if index < 2 else 'good'} common",
+                content=f"{'reject' if index < 2 else 'accept'} shared",
+            ),
+        )
+        for index in range(4)
+    ]
+    title_embeddings = np.array([[1.0, 0.0], [0.9, 0.1], [0.1, 0.9], [0.0, 1.0]])
+    body_embeddings = title_embeddings[:, ::-1]
     labels = np.array([0, 0, 1, 1])
-    relevance_classifier = relevance_embedding.fit_classifier(embeddings, labels)
-
+    relevance_model = relevance_embedding.fit_relevance_model(
+        articles,
+        title_embeddings,
+        body_embeddings,
+        labels,
+        np.ones(4),
+    )
     relevance_embedding.save_relevance_artifact(
         str(tmp_path),
-        relevance_classifier,
+        relevance_model,
         {"good": 2, "bad": 2},
     )
 
     loaded = relevance_embedding.load_relevance_artifact(str(tmp_path))
+    expected = relevance_embedding.build_features(
+        articles,
+        title_embeddings,
+        body_embeddings,
+        relevance_model.title_vectorizer,
+        relevance_model.body_vectorizer,
+    )
+    actual = relevance_embedding.build_features(
+        articles,
+        title_embeddings,
+        body_embeddings,
+        loaded.title_vectorizer,
+        loaded.body_vectorizer,
+    )
     np.testing.assert_allclose(
-        loaded.predict_proba(embeddings),
-        relevance_classifier.predict_proba(embeddings),
+        loaded.classifier.predict_proba(actual),
+        relevance_model.classifier.predict_proba(expected),
     )
 
-    for incompatible_classifier in (
-        LogisticRegression(random_state=42).fit(embeddings, labels),
-        MLPClassifier(random_state=42),
-    ):
-        joblib.dump(
-            {
-                "relevance_classifier": incompatible_classifier,
-                "metadata": relevance_embedding.build_metadata({"good": 2, "bad": 2}),
-            },
-            tmp_path / relevance_embedding.ARTIFACT_FILENAME,
-        )
-        with pytest.raises(RuntimeError, match="not compatible"):
-            relevance_embedding.load_relevance_artifact(str(tmp_path))
+    artifact_path = tmp_path / relevance_embedding.ARTIFACT_FILENAME
+    artifact = joblib.load(artifact_path)
+    artifact["relevance_classifier"].set_params(C=1)
+    joblib.dump(artifact, artifact_path)
+    with pytest.raises(RuntimeError, match="not compatible"):
+        relevance_embedding.load_relevance_artifact(str(tmp_path))
+
+    joblib.dump(
+        {
+            "relevance_classifier": relevance_model.classifier,
+            "metadata": relevance_embedding.build_metadata({"good": 2, "bad": 2}, 2),
+        },
+        artifact_path,
+    )
+    with pytest.raises(RuntimeError, match="not compatible"):
+        relevance_embedding.load_relevance_artifact(str(tmp_path))
 
 
 def test_latest_model_skips_and_cleans_incomplete_training_run(
@@ -184,7 +291,7 @@ def test_latest_model_skips_and_cleans_incomplete_training_run(
     assert not incomplete.exists()
 
 
-def test_inference_scores_come_from_the_relevance_head(
+def test_inference_scores_come_from_the_complete_relevance_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     articles = [
@@ -193,11 +300,8 @@ def test_inference_scores_come_from_the_relevance_head(
     ]
     predicted_with: list[str] = []
 
-    async def encode(*_: object, **__: object) -> np.ndarray:
-        return np.array([[1.0], [2.0]])
-
-    def predict(_: np.ndarray, classifier: str) -> np.ndarray:
-        predicted_with.append(classifier)
+    async def predict(*args: object, **__: object) -> np.ndarray:
+        predicted_with.append(cast(str, args[3]))
         return np.array([0.8, 0.3])
 
     monkeypatch.setattr(llm_infer.torch.cuda, "is_available", lambda: False)
@@ -217,12 +321,7 @@ def test_inference_scores_come_from_the_relevance_head(
         "load_encoder",
         lambda _: ("tokenizer", "encoder"),
     )
-    monkeypatch.setattr(relevance_embedding, "encode_articles", encode)
-    monkeypatch.setattr(
-        relevance_embedding,
-        "predict_probabilities_from_embeddings",
-        predict,
-    )
+    monkeypatch.setattr(relevance_embedding, "predict_probabilities", predict)
 
     results = asyncio.run(llm_infer.infer(articles))
 

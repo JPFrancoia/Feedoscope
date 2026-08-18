@@ -1,6 +1,5 @@
 import math
 import os
-from typing import Literal, cast
 
 
 def strtobool(val: str) -> bool:
@@ -57,20 +56,8 @@ RELEVANCE_EMBEDDING_PROMPT = os.getenv(
     "RELEVANCE_EMBEDDING_PROMPT", "task: classification | query: "
 )
 
-# Maximum token budget used both when preparing relevance text and when encoding
-# it with the frozen Gemma model.
+# Maximum token budget for the independent relevance body embedding.
 RELEVANCE_MAX_LENGTH = int(os.getenv("RELEVANCE_MAX_LENGTH", "2048"))
-
-# Strategy used to build the relevance text from article title and body before
-# embedding. This changes the embedding output and is part of the cache key.
-_relevance_text_prep_mode = os.getenv("RELEVANCE_TEXT_PREP_MODE", "title_head")
-assert _relevance_text_prep_mode in (
-    "single_blob",
-    "title_head",
-), "RELEVANCE_TEXT_PREP_MODE must be 'single_blob' or 'title_head'"
-RELEVANCE_TEXT_PREP_MODE = cast(
-    Literal["single_blob", "title_head"], _relevance_text_prep_mode
-)
 
 # Explicit cache-busting version for relevance text preparation. Bump this when
 # changing text-cleaning or truncation logic so stale embeddings are recomputed.

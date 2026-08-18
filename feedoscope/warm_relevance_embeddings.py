@@ -32,7 +32,7 @@ async def main() -> None:
             )
             if not articles:
                 break
-            await relevance_embedding.encode_articles(
+            await relevance_embedding.encode_article_fields(
                 articles,
                 tokenizer,
                 encoder,
@@ -41,7 +41,7 @@ async def main() -> None:
             )
             after_article_id = articles[-1].article_id
             total += len(articles)
-            logger.info(f"Warmed prompted embeddings for {total} articles")
+            logger.info(f"Warmed title and body embeddings for {total} articles")
     finally:
         await dr.global_pool.close()
 

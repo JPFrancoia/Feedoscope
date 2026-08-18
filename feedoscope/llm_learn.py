@@ -5,7 +5,6 @@ import os
 import time
 
 import numpy as np
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     average_precision_score,
     f1_score,
@@ -58,8 +57,12 @@ async def train_model(
     bad_articles: list[Article],
     model_path: str,
     device: torch.device,
-) -> tuple[torch.nn.Module, PreTrainedTokenizerBase, LogisticRegression]:
-    """Train the relevance head from one embedding matrix."""
+) -> tuple[
+    torch.nn.Module,
+    PreTrainedTokenizerBase,
+    relevance_embedding.RelevanceModel,
+]:
+    """Train the complete title/body plus Word TF-IDF relevance model."""
     tokenizer, encoder = relevance_embedding.load_encoder(device)
     training_articles = good_articles + bad_articles
     relevance_labels = np.array([1] * len(good_articles) + [0] * len(bad_articles))
@@ -75,7 +78,7 @@ async def train_model(
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
 
-    embeddings = await relevance_embedding.encode_articles(
+    title_embeddings, body_embeddings = await relevance_embedding.encode_article_fields(
         training_articles,
         tokenizer,
         encoder,
@@ -88,18 +91,19 @@ async def train_model(
         f"Relevance logistic regression uses {config.IMPORTANT_ARTICLE_WEIGHT}x "
         f"weights for {important_count} important articles."
     )
-    relevance_classifier = relevance_embedding.fit_classifier(
-        embeddings,
+    relevance_model = relevance_embedding.fit_relevance_model(
+        training_articles,
+        title_embeddings,
+        body_embeddings,
         relevance_labels,
-        pipeline_label="relevance",
-        sample_weights=relevance_sample_weights,
+        relevance_sample_weights,
     )
     relevance_embedding.save_relevance_artifact(
         model_path,
-        relevance_classifier,
+        relevance_model,
         train_counts={"good": len(good_articles), "bad": len(bad_articles)},
     )
-    return encoder, tokenizer, relevance_classifier
+    return encoder, tokenizer, relevance_model
 
 
 async def main() -> None:
@@ -129,10 +133,10 @@ async def main() -> None:
     if os.path.exists(os.path.join(model_path, relevance_embedding.ARTIFACT_FILENAME)):
         logger.info(f"Loading relevance artifact from {model_path}")
         tokenizer, encoder = relevance_embedding.load_encoder(device)
-        relevance_classifier = relevance_embedding.load_relevance_artifact(model_path)
+        relevance_model = relevance_embedding.load_relevance_artifact(model_path)
     else:
         logger.info("Training new relevance backend...")
-        encoder, tokenizer, relevance_classifier = await train_model(
+        encoder, tokenizer, relevance_model = await train_model(
             good_articles,
             bad_articles,
             model_path,
@@ -159,14 +163,14 @@ async def main() -> None:
         good_validation,
         tokenizer,
         encoder,
-        relevance_classifier,
+        relevance_model,
         device,
     )
     not_good_probs = await relevance_embedding.predict_probabilities(
         not_good_validation,
         tokenizer,
         encoder,
-        relevance_classifier,
+        relevance_model,
         device,
     )
 
