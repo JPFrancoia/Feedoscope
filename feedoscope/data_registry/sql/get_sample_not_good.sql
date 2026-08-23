@@ -20,7 +20,7 @@ with numbered_articles as (
         join feeds f on e.feed_id = f.id
     where
         e.vote = -1  -- Bad articles
-        and e.published_at > now() - interval '3 years'
+        and e.published_at > now() - interval '10 years'
     order by
         e.id asc
 )
