@@ -95,7 +95,10 @@ async def get_read_articles_training(
     async with global_pool.connection() as conn, conn.cursor() as cur:
         await cur.execute(
             query,
-            {"validation_size": validation_size},
+            {
+                "validation_size": validation_size,
+                "training_history_days": config.TRAINING_HISTORY_DAYS,
+            },
         )
         data = await cur.fetchall()
 
@@ -149,7 +152,10 @@ async def get_published_articles(validation_size: int = 0) -> list[Article]:
     async with global_pool.connection() as conn, conn.cursor() as cur:
         await cur.execute(
             query,
-            {"validation_size": validation_size},
+            {
+                "validation_size": validation_size,
+                "training_history_days": config.TRAINING_HISTORY_DAYS,
+            },
         )
         data = await cur.fetchall()
 
@@ -174,7 +180,10 @@ async def get_sample_good(validation_size: int) -> list[Article]:
     async with global_pool.connection() as conn, conn.cursor() as cur:
         await cur.execute(
             query,
-            {"validation_size": validation_size},
+            {
+                "validation_size": validation_size,
+                "training_history_days": config.TRAINING_HISTORY_DAYS,
+            },
         )
         data = await cur.fetchall()
 
@@ -196,7 +205,10 @@ async def get_sample_not_good(validation_size: int) -> list[Article]:
     async with global_pool.connection() as conn, conn.cursor() as cur:
         await cur.execute(
             query,
-            {"validation_size": validation_size},
+            {
+                "validation_size": validation_size,
+                "training_history_days": config.TRAINING_HISTORY_DAYS,
+            },
         )
         data = await cur.fetchall()
 

@@ -43,6 +43,10 @@ assert (
 # Production-style runs leave this at 0 to skip validation entirely.
 VALIDATION_SIZE = int(os.getenv("VALIDATION_SIZE", "0"))
 
+# Maximum age of relevance training articles, in whole days.
+TRAINING_HISTORY_DAYS = int(os.getenv("TRAINING_HISTORY_DAYS", "1095"))
+assert TRAINING_HISTORY_DAYS > 0, "TRAINING_HISTORY_DAYS must be positive"
+
 # Hugging Face model ID for the frozen relevance embedding encoder.
 RELEVANCE_MODEL_NAME = os.getenv("RELEVANCE_MODEL_NAME", "google/embeddinggemma-300m")
 

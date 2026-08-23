@@ -165,7 +165,8 @@ async def eval_relevance(device: torch.device) -> None:
     """Evaluate the Relevance model on a strict forward-time holdout."""
     validation_size = config.VALIDATION_SIZE
     logger.info(
-        f"[Relevance] Starting evaluation with VALIDATION_SIZE={validation_size}"
+        f"[Relevance] Starting evaluation with VALIDATION_SIZE={validation_size}, "
+        f"TRAINING_HISTORY_DAYS={config.TRAINING_HISTORY_DAYS}"
     )
     start_time = time.time()
     all_good = await dr.get_read_articles_training(validation_size=0)

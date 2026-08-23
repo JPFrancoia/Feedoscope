@@ -109,6 +109,7 @@ async def train_model(
 async def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
+    logger.info(f"Training history: {config.TRAINING_HISTORY_DAYS} days")
 
     if device.type != "cuda" and not config.ALLOW_TRAINING_WO_GPU:
         mes = "GPU not available. Exiting"

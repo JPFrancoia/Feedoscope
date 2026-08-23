@@ -390,6 +390,78 @@ def test_score_updates_commit_bounded_batches(
         )
 
 
+@pytest.mark.parametrize(
+    "filename",
+    (
+        "get_read_articles_training.sql",
+        "get_published_articles.sql",
+        "get_sample_good.sql",
+        "get_sample_not_good.sql",
+    ),
+)
+def test_training_queries_use_configured_day_boundary(filename: str) -> None:
+    query = dr._get_query_from_file(filename)
+
+    assert (
+        "published_at > now() - interval '1 day' * %(training_history_days)s" in query
+    )
+
+
+def test_training_queries_use_configured_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executed: list[tuple[str, dict[str, int]]] = []
+
+    class Cursor(AbstractAsyncContextManager["Cursor"]):
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def execute(self, query: str, params: dict[str, int]) -> None:
+            executed.append((query, params))
+
+        async def fetchall(self) -> list[dict[str, object]]:
+            return []
+
+    class Connection(AbstractAsyncContextManager["Connection"]):
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+    class Pool:
+        def connection(self) -> Connection:
+            return Connection()
+
+    monkeypatch.setattr(dr, "global_pool", Pool())
+    monkeypatch.setattr(dr.config, "TRAINING_HISTORY_DAYS", 1825)
+    monkeypatch.setattr(dr, "_get_query_from_file", lambda filename: filename)
+
+    asyncio.run(dr.get_read_articles_training(validation_size=1))
+    asyncio.run(dr.get_published_articles(validation_size=2))
+    asyncio.run(dr.get_sample_good(validation_size=3))
+    asyncio.run(dr.get_sample_not_good(validation_size=4))
+
+    assert executed == [
+        (
+            "get_read_articles_training.sql",
+            {"validation_size": 1, "training_history_days": 1825},
+        ),
+        (
+            "get_published_articles.sql",
+            {"validation_size": 2, "training_history_days": 1825},
+        ),
+        (
+            "get_sample_good.sql",
+            {"validation_size": 3, "training_history_days": 1825},
+        ),
+        (
+            "get_sample_not_good.sql",
+            {"validation_size": 4, "training_history_days": 1825},
+        ),
+    ]
+
+
 def test_unread_score_cleanup_queries(monkeypatch: pytest.MonkeyPatch) -> None:
     executed: list[tuple[str, dict[str, float] | None]] = []
 

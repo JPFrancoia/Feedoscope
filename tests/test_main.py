@@ -111,6 +111,38 @@ def test_age_decay_config_rejects_invalid_half_life(value: str) -> None:
     assert "AGE_DECAY_HALF_LIFE_DAYS must be finite and positive" in result.stderr
 
 
+def test_training_history_defaults_to_three_years() -> None:
+    env = os.environ.copy()
+    env.pop("TRAINING_HISTORY_DAYS", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from feedoscope import config; print(config.TRAINING_HISTORY_DAYS)",
+        ],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.strip() == "1095"
+
+
+@pytest.mark.parametrize("value", ("0", "-1"))
+def test_training_history_rejects_nonpositive_days(value: str) -> None:
+    result = subprocess.run(
+        [sys.executable, "-c", "from feedoscope import config"],
+        env=os.environ | {"TRAINING_HISTORY_DAYS": value},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "TRAINING_HISTORY_DAYS must be positive" in result.stderr
+
+
 def test_main_scores_articles_with_fixed_age_decay(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
