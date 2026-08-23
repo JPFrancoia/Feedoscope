@@ -21,7 +21,7 @@ with numbered_articles as (
     where
         e.status = 'read'
         and e.vote >= 0  -- vote=0 or vote=1 are considered good
-        and e.published_at > now() - interval '10 years'
+        and e.published_at >= (select min(published_at) from entries where vote = -1)
     order by
         e.id asc
 )
