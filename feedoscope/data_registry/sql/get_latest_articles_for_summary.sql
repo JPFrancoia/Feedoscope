@@ -1,4 +1,14 @@
--- Get the newest Miniflux entries for one-line summary generation.
+-- Get unsummarized entries among the newest Miniflux entries.
+with selected_entries as (
+    select
+        e.id
+    from
+        entries e
+    order by
+        e.id desc
+    limit
+        %(limit)s
+)
 select
     e.id as article_id,
     e.title,
@@ -14,8 +24,9 @@ select
     e.status
 from
     entries e
+    join selected_entries s on e.id = s.id
     join feeds f on e.feed_id = f.id
+where
+    e.one_line_summary = ''
 order by
-    e.id desc
-limit
-    %(limit)s;
+    e.id desc;
