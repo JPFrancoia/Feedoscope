@@ -157,6 +157,23 @@ def test_main_selects_highest_scored_articles(monkeypatch) -> None:
     get_articles.assert_awaited_once_with(200)
 
 
+def test_main_selects_recent_articles(monkeypatch) -> None:
+    get_articles = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        summarize_articles.dr,
+        "global_pool",
+        SimpleNamespace(open=AsyncMock(), close=AsyncMock()),
+    )
+    monkeypatch.setattr(
+        summarize_articles.dr,
+        "get_recent_articles_for_summary",
+        get_articles,
+    )
+
+    assert asyncio.run(summarize_articles.main(days=30)) == 0
+    get_articles.assert_awaited_once_with(30)
+
+
 def test_main_saves_only_valid_summaries(monkeypatch) -> None:
     update_summary = AsyncMock()
     summarize = iter(["A factual summary.", None])
