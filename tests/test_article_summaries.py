@@ -171,7 +171,7 @@ def test_main_selects_recent_articles(monkeypatch) -> None:
     )
 
     assert asyncio.run(summarize_articles.main(days=30)) == 0
-    get_articles.assert_awaited_once_with(30, 100)
+    get_articles.assert_awaited_once_with(30)
 
 
 def test_main_saves_only_valid_summaries(monkeypatch) -> None:

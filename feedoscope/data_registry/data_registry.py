@@ -85,16 +85,14 @@ async def get_latest_articles_for_summary(limit: int) -> list[Article]:
     return [Article(**article) for article in data]
 
 
-async def get_recent_articles_for_summary(days: int, limit: int) -> list[Article]:
-    """Return a bounded set of recent unsummarized entries."""
+async def get_recent_articles_for_summary(days: int) -> list[Article]:
+    """Return every unsummarized entry in the requested publication window."""
     if days <= 0:
         raise ValueError("days must be positive")
-    if limit <= 0:
-        raise ValueError("limit must be positive")
 
     query = _get_query_from_file("get_recent_articles_for_summary.sql")
     async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.execute(query, {"days": days, "limit": limit})
+        await cur.execute(query, {"days": days})
         data = await cur.fetchall()
     return [Article(**article) for article in data]
 
