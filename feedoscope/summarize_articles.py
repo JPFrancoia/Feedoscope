@@ -38,7 +38,7 @@ async def main(
     await dr.global_pool.open(wait=True)
     try:
         if days is not None:
-            articles = await dr.get_recent_articles_for_summary(days)
+            articles = await dr.get_recent_articles_for_summary(days, limit)
         elif by_score:
             articles = await dr.get_highest_scored_articles_for_summary(limit)
         else:

@@ -20,4 +20,6 @@ where
     and e.one_line_summary = ''
 order by
     e.published_at desc,
-    e.id desc;
+    e.id desc
+limit
+    %(limit)s;
