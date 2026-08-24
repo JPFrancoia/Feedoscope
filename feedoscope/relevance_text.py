@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Literal
+from typing import Literal, cast
 
 from cleantext import clean  # type: ignore[import]
 from transformers import PreTrainedTokenizerBase
@@ -52,7 +52,7 @@ def prepare_title_head(
 
     if max_length <= special_buffer:
         title_ids = _encode_truncated(tokenizer, cleaned_title, 1)
-        return tokenizer.decode(title_ids, skip_special_tokens=True).strip()
+        return cast(str, tokenizer.decode(title_ids, skip_special_tokens=True)).strip()
 
     title_budget = max(1, max_length - special_buffer)
     kept_title_ids = _encode_truncated(tokenizer, cleaned_title, title_budget)
@@ -63,9 +63,13 @@ def prepare_title_head(
     head_ids = _encode_truncated(tokenizer, cleaned_body, remaining_budget)
 
     sep = f" {tokenizer.sep_token} " if tokenizer.sep_token else " "
-    parts = [tokenizer.decode(kept_title_ids, skip_special_tokens=True).strip()]
+    parts = [
+        cast(str, tokenizer.decode(kept_title_ids, skip_special_tokens=True)).strip()
+    ]
     if head_ids:
-        parts.append(tokenizer.decode(head_ids, skip_special_tokens=True).strip())
+        parts.append(
+            cast(str, tokenizer.decode(head_ids, skip_special_tokens=True)).strip()
+        )
 
     return sep.join(part for part in parts if part)
 

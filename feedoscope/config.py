@@ -71,6 +71,13 @@ RELEVANCE_PREP_VERSION = int(os.getenv("RELEVANCE_PREP_VERSION", "2"))
 # up inference and training if enough GPU memory is available.
 RELEVANCE_ENCODER_BATCH_SIZE = int(os.getenv("RELEVANCE_ENCODER_BATCH_SIZE", "4"))
 
+# Gemma 4 instruction-tuned model for one-line article summaries.
+SUMMARY_MODEL_NAME = os.getenv("SUMMARY_MODEL_NAME", "google/gemma-4-E4B-it")
+SUMMARY_MAX_INPUT_TOKENS = int(os.getenv("SUMMARY_MAX_INPUT_TOKENS", "8192"))
+assert SUMMARY_MAX_INPUT_TOKENS > 0, "SUMMARY_MAX_INPUT_TOKENS must be positive"
+SUMMARY_MAX_NEW_TOKENS = int(os.getenv("SUMMARY_MAX_NEW_TOKENS", "80"))
+assert SUMMARY_MAX_NEW_TOKENS > 0, "SUMMARY_MAX_NEW_TOKENS must be positive"
+
 # Prompted relevance uses deterministic weighted logistic regression. These
 # values affect only the relevance classifier artifact, not the embedding cache.
 RELEVANCE_LINEAR_C = float(os.getenv("RELEVANCE_LINEAR_C", "5.0"))
