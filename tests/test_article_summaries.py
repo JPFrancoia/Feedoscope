@@ -99,6 +99,47 @@ def test_summarize_article_uses_tokenized_chat_input() -> None:
     assert summary == "A factual summary."
 
 
+def test_summarize_article_retries_invalid_output() -> None:
+    class Inputs(dict):
+        def to(self, device: str) -> "Inputs":
+            assert device == "cuda"
+            return self
+
+    class Processor:
+        tokenizer = WordTokenizer()
+
+        def __init__(self) -> None:
+            self.messages: list[list[dict[str, object]]] = []
+
+        def apply_chat_template(self, messages, *args, **kwargs) -> Inputs:
+            del args
+            assert kwargs["tokenize"]
+            self.messages.append(messages)
+            return Inputs({"input_ids": SimpleNamespace(shape=(1, 3))})
+
+        def decode(self, token_ids: list[int], *, skip_special_tokens: bool) -> str:
+            assert skip_special_tokens
+            return (
+                "Two sentences. Invalid." if token_ids == [4] else "Corrected summary."
+            )
+
+    class Model:
+        device = "cuda"
+        calls = 0
+
+        def generate(self, **kwargs) -> list[list[int]]:
+            assert "input_ids" in kwargs
+            self.calls += 1
+            return [[1, 2, 3, 4 if self.calls == 1 else 5]]
+
+    processor = Processor()
+    summary = article_summaries.summarize_article(article(), (processor, Model()))
+
+    assert summary == "Corrected summary."
+    assert len(processor.messages) == 2
+    assert processor.messages[1][-2]["role"] == "assistant"
+
+
 def test_main_selects_highest_scored_articles(monkeypatch) -> None:
     get_articles = AsyncMock(return_value=[])
     monkeypatch.setattr(

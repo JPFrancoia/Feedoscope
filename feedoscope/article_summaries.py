@@ -35,9 +35,11 @@ def prepare_article_source(article: Article, tokenizer: Any, max_tokens: int) ->
     return tokenizer.decode(token_ids, skip_special_tokens=True).strip()
 
 
-def build_messages(source: str) -> list[dict[str, Any]]:
+def build_messages(
+    source: str, invalid_summary: str | None = None
+) -> list[dict[str, Any]]:
     """Build the fixed chat prompt for one untrusted article source."""
-    return [
+    messages = [
         {"role": "system", "content": [{"type": "text", "text": _SYSTEM_PROMPT}]},
         {
             "role": "user",
@@ -49,6 +51,25 @@ def build_messages(source: str) -> list[dict[str, Any]]:
             ],
         },
     ]
+    if invalid_summary is not None:
+        messages.extend(
+            [
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": invalid_summary}],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Rewrite that as exactly one factual sentence.",
+                        }
+                    ],
+                },
+            ]
+        )
+    return messages
 
 
 def normalize_summary(text: str) -> str | None:
@@ -85,20 +106,10 @@ def load_summary_model() -> tuple[Any, Any]:
     return processor, model
 
 
-def summarize_article(article: Article, summary_model: tuple[Any, Any]) -> str | None:
-    """Generate and validate one summary for an article."""
-    processor, model = summary_model
-    source = prepare_article_source(
-        article,
-        processor.tokenizer,
-        config.SUMMARY_MAX_INPUT_TOKENS,
-    )
-    if not source:
-        logger.warning(f"Skipping article {article.article_id}: empty source.")
-        return None
-
+def generate_summary(processor: Any, model: Any, messages: list[dict[str, Any]]) -> str:
+    """Generate one summary from prepared chat messages."""
     inputs = processor.apply_chat_template(
-        build_messages(source),
+        messages,
         add_generation_prompt=True,
         tokenize=True,
         return_dict=True,
@@ -110,11 +121,32 @@ def summarize_article(article: Article, summary_model: tuple[Any, Any]) -> str |
         max_new_tokens=config.SUMMARY_MAX_NEW_TOKENS,
     )
     prompt_tokens = inputs["input_ids"].shape[-1]
-    summary = normalize_summary(
-        processor.decode(generated_tokens[0][prompt_tokens:], skip_special_tokens=True)
+    return processor.decode(
+        generated_tokens[0][prompt_tokens:], skip_special_tokens=True
     )
+
+
+def summarize_article(article: Article, summary_model: tuple[Any, Any]) -> str | None:
+    """Generate and validate a summary, with one format-correction retry."""
+    processor, model = summary_model
+    source = prepare_article_source(
+        article,
+        processor.tokenizer,
+        config.SUMMARY_MAX_INPUT_TOKENS,
+    )
+    if not source:
+        logger.warning(f"Skipping article {article.article_id}: empty source.")
+        return None
+
+    output = generate_summary(processor, model, build_messages(source))
+    summary = normalize_summary(output)
+    if summary is not None:
+        return summary
+
+    output = generate_summary(processor, model, build_messages(source, output))
+    summary = normalize_summary(output)
     if summary is None:
         logger.warning(
-            f"Skipping article {article.article_id}: invalid summary output."
+            f"Skipping article {article.article_id}: invalid summary after retry."
         )
     return summary
