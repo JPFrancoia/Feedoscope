@@ -1,6 +1,8 @@
 # Intrinsic Semantic Freshness Implementation Plan
 
-**Status:** Grill completed — implementation-ready and awaiting user approval (2026-07-26)
+**Status:** Historical — implemented on 2026-07-27 and removed on 2026-08-08.
+
+**Outcome:** Commit `15d6f6d` implemented the semantic-lifetime pipeline. Commit `f9a16fa` removed semantic freshness and urgency from production. This plan preserves the original design and does not define current behavior.
 
 ## 1. Brief
 

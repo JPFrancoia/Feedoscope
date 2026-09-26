@@ -1,5 +1,5 @@
 -- Get published articles (considered "bad")
--- In Miniflux: vote=-1 (equivalent to TTRSS published=true)
+-- In Miniflux: vote=-1 is an explicit negative relevance label
 with numbered_articles as (
     select
         e.id as article_id,

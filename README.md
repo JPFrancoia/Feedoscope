@@ -1,27 +1,69 @@
 # Feedoscope
 
-Feedoscope is a tool that ranks your RSS articles by their relevance to you.
-It's meant to be used with [Tiny Tiny RSS](https://tt-rss.org/).
+Feedoscope ranks unread Miniflux articles by personal relevance. It trains from explicit Miniflux feedback and writes derived scores back to PostgreSQL.
 
-**It's under active development, and it's still very rough around the edges.**
+## Current pipeline
 
-## How it works
+Feedoscope uses these relevance labels:
 
-If you use ttrss like I do, you basically scroll through your list of
-articles and stop to read some, based on their title. Eventually, you'll
-star some articles that you found really interesting. The articles that you
-deem uninteresting stay unread. However, there is only so much time in a
-day to scroll through a list of articles, and you'll most likely miss some
-of the interesting ones.
+- Positive: a read article with vote `0` or `1`.
+- Negative: an article with vote `-1`.
+- Important positive: a positive article that is starred or upvoted.
 
-I would like to optimize this process by using machine learning to give a score
-to each unread article, based on the articles you have read. In a nutshell,
-here is how it works:
+The model uses prompted `google/embeddinggemma-300m` title and body vectors. It also uses separate Word TF-IDF title and body features.
 
-- Each read article is considered a positive example
-- The ML uses these positive examples to learn what you find interesting
-- A score is computed for each unread article
-- You can then sort your unread articles by score, and read the most relevant ones first
+Weighted logistic regression fits the combined features. Important positive rows receive a weight of 20.
 
+Routine inference selects unread, unstarred articles without a downvote. It applies fixed seven-day age decay and a cube-root score transform.
 
-The full blog articles is here: [Feedoscope: ranking RSS articles with LLMs by relevance and time sensitivity](https://jpfrancoia.github.io/2025/08/17/feedoscope.html)
+Feedoscope stores the final integer score in Miniflux `entries.score`. Miniflux displays and sorts the score.
+
+Urgency, semantic-freshness, and separate preference heads are not active production pipelines.
+
+## Commands
+
+Install dependencies:
+
+```bash
+make install
+```
+
+Warm title and body embeddings:
+
+```bash
+make warm_embeddings
+```
+
+Train the relevance model:
+
+```bash
+make train
+```
+
+Run relevance inference without age decay:
+
+```bash
+make infer
+```
+
+Run full inference with fixed age decay:
+
+```bash
+make full_infer
+```
+
+Run the strict forward evaluation:
+
+```bash
+make eval
+```
+
+Set `DATABASE_URL` before a command that uses PostgreSQL. Training and inference require a GPU unless their explicit CPU fallback setting is enabled.
+
+Read `AGENTS.md` for repository commands, tests, and code conventions. Read `../docs/feedoscope-context.md` for current Feedoscope terms.
+
+## Historical background
+
+The original system used Tiny Tiny RSS and positive-unlabeled learning. The current system uses the Miniflux fork and explicit downvotes.
+
+The [original Feedoscope article](https://jpfrancoia.github.io/2025/08/17/feedoscope.html) describes an earlier architecture.

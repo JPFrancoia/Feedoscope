@@ -186,7 +186,7 @@ feedoscope/                  # Main application package
   config.py                  # Environment-based configuration
   entities.py                # Pydantic data models
   utils.py                   # Text cleaning utilities
-  llm_learn.py               # Relevance training (EmbeddingGemma + MLP)
+  llm_learn.py               # Title/body embeddings, Word TF-IDF, and weighted logistic training
   llm_infer.py               # Relevance inference
   data_registry/
     data_registry.py         # All DB access functions
