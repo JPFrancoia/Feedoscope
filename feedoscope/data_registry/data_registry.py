@@ -343,17 +343,21 @@ async def get_unread_articles_by_age(
 
 
 async def update_scores(
-    article_ids: list[int], article_titles: list[str], scores: list[int]
+    article_ids: list[int],
+    article_titles: list[str],
+    scores: list[int],
+    raw_scores: list[float],
 ) -> None:
     """Update the scores of articles in the database.
 
     Args:
         article_titles: List of article titles (unused, kept for backward compatibility).
         article_ids: List of article IDs to update.
-        scores: List of scores to set for the articles.
+        scores: List of final scores to set for the articles.
+        raw_scores: List of relevance predictions before decay and expansion.
 
     """
-    if len(article_ids) != len(scores):
+    if len(article_ids) != len(scores) or len(article_ids) != len(raw_scores):
         raise ValueError("article_ids and scores must align")
 
     scores_query = _get_query_from_file("update_scores.sql")
@@ -362,9 +366,12 @@ async def update_scores(
         for start in range(0, len(article_ids), SCORE_UPDATE_BATCH_SIZE):
             end = start + SCORE_UPDATE_BATCH_SIZE
             rows = [
-                {"score": score, "int_id": int_id}
-                for score, int_id in zip(
-                    scores[start:end], article_ids[start:end], strict=True
+                {"score": score, "raw_score": raw_score, "int_id": int_id}
+                for score, raw_score, int_id in zip(
+                    scores[start:end],
+                    raw_scores[start:end],
+                    article_ids[start:end],
+                    strict=True,
                 )
             ]
             await cur.executemany(scores_query, rows)

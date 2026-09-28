@@ -128,10 +128,11 @@ async def main(
             f"for {len(relevance_scores.article_ids)} articles."
         )
 
+        raw_scores = relevance_scores.scores.copy()
         for idx, article in enumerate(articles):
             assert article.article_id == relevance_scores.article_ids[idx]
             relevance_scores.scores[idx] = decay_relevance_score(
-                original_score=relevance_scores.scores[idx],
+                original_score=raw_scores[idx],
                 date_entered=article.date_entered,
                 half_life_days=config.AGE_DECAY_HALF_LIFE_DAYS,
             )
@@ -142,6 +143,7 @@ async def main(
             scores=relevance_embedding.prepare_scores_for_storage(
                 relevance_scores.scores
             ),
+            raw_scores=raw_scores,
         )
     finally:
         await dr.global_pool.close()

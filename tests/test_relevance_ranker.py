@@ -3,6 +3,7 @@ from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import joblib  # type: ignore[import-untyped]
 import numpy as np
@@ -329,6 +330,42 @@ def test_inference_scores_come_from_the_complete_relevance_model(
     assert predicted_with == ["relevance"]
 
 
+def test_standalone_inference_preserves_raw_scores(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    results = SimpleNamespace(
+        article_ids=[1], article_titles=["Article"], scores=[50.25]
+    )
+    update_scores = AsyncMock()
+    monkeypatch.setattr(
+        llm_infer.dr,
+        "global_pool",
+        SimpleNamespace(open=AsyncMock(), close=AsyncMock()),
+    )
+    monkeypatch.setattr(llm_infer.dr, "clear_downvoted_unread_scores", AsyncMock())
+    monkeypatch.setattr(
+        llm_infer.dr, "get_previous_days_unread_articles", AsyncMock(return_value=[])
+    )
+    monkeypatch.setattr(llm_infer.dr, "update_scores", update_scores)
+    monkeypatch.setattr(llm_infer, "infer", AsyncMock(return_value=results))
+
+    asyncio.run(llm_infer.main())
+
+    assert update_scores.await_args is not None
+    assert update_scores.await_args.kwargs["raw_scores"] == [50.25]
+    assert update_scores.await_args.kwargs["scores"] == [
+        relevance_embedding.prepare_scores_for_storage([50.25])[0]
+    ]
+
+
+def test_score_update_sql_writes_both_scores_together() -> None:
+    query = dr._get_query_from_file("update_scores.sql")
+    assert query.splitlines()[-1] == (
+        "update entries set score=%(score)s, raw_relevance_score=%(raw_score)s "
+        "where id = %(int_id)s;"
+    )
+
+
 def test_score_updates_commit_bounded_batches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -370,13 +407,20 @@ def test_score_updates_commit_bounded_batches(
             article_ids=[1, 2, 3, 4, 5],
             article_titles=["1", "2", "3", "4", "5"],
             scores=[10, 20, 30, 40, 50],
+            raw_scores=[11.1, 22.2, 33.3, 44.4, 55.5],
         )
     )
 
     assert batches == [
-        [{"score": 10, "int_id": 1}, {"score": 20, "int_id": 2}],
-        [{"score": 30, "int_id": 3}, {"score": 40, "int_id": 4}],
-        [{"score": 50, "int_id": 5}],
+        [
+            {"score": 10, "raw_score": 11.1, "int_id": 1},
+            {"score": 20, "raw_score": 22.2, "int_id": 2},
+        ],
+        [
+            {"score": 30, "raw_score": 33.3, "int_id": 3},
+            {"score": 40, "raw_score": 44.4, "int_id": 4},
+        ],
+        [{"score": 50, "raw_score": 55.5, "int_id": 5}],
     ]
     assert len(commits) == 3
 
@@ -386,6 +430,17 @@ def test_score_updates_commit_bounded_batches(
                 article_ids=[1],
                 article_titles=["1"],
                 scores=[10, 20],
+                raw_scores=[10.0],
+            )
+        )
+
+    with pytest.raises(ValueError, match="must align"):
+        asyncio.run(
+            dr.update_scores(
+                article_ids=[1],
+                article_titles=["1"],
+                scores=[10],
+                raw_scores=[],
             )
         )
 

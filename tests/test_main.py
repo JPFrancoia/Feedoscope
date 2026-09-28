@@ -149,7 +149,7 @@ def test_main_scores_articles_with_fixed_age_decay(
     relevance_results = RelevanceInferenceResults(
         article_ids=[1],
         article_titles=["Article"],
-        scores=[100.0],
+        scores=[99.75],
         model_key="test",
     )
     update_scores = AsyncMock()
@@ -179,3 +179,4 @@ def test_main_scores_articles_with_fixed_age_decay(
     update_scores.assert_awaited_once()
     assert update_scores.await_args is not None
     assert update_scores.await_args.kwargs["scores"] == [21]
+    assert update_scores.await_args.kwargs["raw_scores"] == [99.75]

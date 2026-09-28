@@ -161,6 +161,7 @@ async def main() -> None:
         article_ids=results.article_ids,
         article_titles=results.article_titles,
         scores=relevance_embedding.prepare_scores_for_storage(results.scores),
+        raw_scores=results.scores,
     )
     logger.debug(
         f"Scores updated in the database for {len(results.article_ids)} articles."
