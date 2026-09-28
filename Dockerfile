@@ -1,7 +1,7 @@
 FROM python:3.12-slim AS builder
 
 # Install build dependencies (libpq-dev needed for psycopg compilation)
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -35,14 +35,19 @@ RUN uv sync --locked --no-editable --no-group dev
 FROM python:3.12-slim AS runtime
 
 # Install runtime dependencies:
-#   libpq for psycopg, postgresql-client for migrations,
+#   libpq5 for psycopg, postgresql-client for migrations,
 #   gcc for Triton JIT compilation of CUDA kernels at runtime.
 # CUDA runtime libs (cudart, cublas, etc.) are bundled via PyTorch's nvidia-* pip packages.
-RUN apt-get update && apt-get install -y \
-    libpq-dev \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    libc6-dev \
     postgresql-client \
     gcc \
     && rm -rf /var/lib/apt/lists/*
+
+RUN rm -rf /usr/local/lib/python3.12/site-packages/pip \
+    /usr/local/lib/python3.12/site-packages/pip-*.dist-info \
+    /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12
 
 # Place executables in the environment at the front of the path
 ENV VIRTUAL_ENV=/app/.venv \

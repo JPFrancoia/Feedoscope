@@ -7,6 +7,8 @@ pkg:
 	echo "Tag: " ${TAG}
 	echo ${NAME}:${TAG}
 	docker build -t ${NAME}:${TAG} .
+	trivy image --scanners vuln --format json --output /tmp/${NAME}-${TAG}-trivy.json ${NAME}:${TAG}
+	trivy image --scanners vuln --severity MEDIUM,HIGH,CRITICAL --ignore-unfixed --exit-code 1 ${NAME}:${TAG}
 	-docker inspect "${NAME}:latest" > /dev/null 2>&1 || docker rmi ${NAME}:latest
 	docker tag ${NAME}:${TAG} ${NAME}:latest
 	docker tag ${NAME}:${TAG} ${BUILD_HOST}/${NAME}:${TAG}
