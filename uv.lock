@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12.11"
 
 [[package]]
@@ -388,6 +388,7 @@ wheels = [
 name = "feedoscope"
 version = "0.1.0"
 source = { virtual = "." }
+default-groups = ["dev", "train"]
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "bitsandbytes" },
@@ -400,6 +401,7 @@ dependencies = [
     { name = "pillow" },
     { name = "psycopg" },
     { name = "psycopg-pool" },
+    { name = "pyarrow" },
     { name = "pydantic" },
     { name = "python-json-logger" },
     { name = "scikit-learn" },
@@ -439,6 +441,7 @@ requires-dist = [
     { name = "pillow", specifier = ">=11.3.0" },
     { name = "psycopg", specifier = ">=3.2.9,<4.0.0" },
     { name = "psycopg-pool", specifier = ">=3.2.6,<4.0.0" },
+    { name = "pyarrow", specifier = ">=21.0.0" },
     { name = "pydantic", specifier = ">=2.11.7" },
     { name = "python-json-logger", specifier = ">=3.3.0,<4.0.0" },
     { name = "scikit-learn", specifier = ">=1.7.1" },

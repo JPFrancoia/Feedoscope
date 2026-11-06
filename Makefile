@@ -39,6 +39,10 @@ full_infer:
 eval:
 	LOGGING_CONFIG=dev_logging.conf VALIDATION_SIZE=150 uv run python -m feedoscope.eval_models
 
+.PHONY: snapshot
+snapshot:
+	uv run python -m feedoscope.export_snapshot
+
 up:
 	migrate -database ${DATABASE_URL} -path db/migrations up 1
 
