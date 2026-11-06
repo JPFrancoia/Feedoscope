@@ -20,8 +20,8 @@ def article_frame() -> pd.DataFrame:
             {
                 "article_id": day * 2 + label,
                 "published_at": start + pd.Timedelta(days=day),
-                "title": f"shared title {day} topic",
-                "content": f"<p>shared body {day} subject</p>",
+                "title": f"shared title {day} {'science' if day % 2 else 'history'}",
+                "content": f"<p>shared body {day} {'science' if day % 2 else 'history'}</p>",
                 "status": "read" if label else "unread",
                 "vote": 0 if label else -1,
                 "starred": label == 1 and day == 1,
@@ -165,3 +165,52 @@ def test_paired_bootstrap_is_deterministic_and_zero_for_identical_scores() -> No
     assert benchmark.bootstrap_differences(labels, scores, candidate, 10) == (
         benchmark.bootstrap_differences(labels, scores, candidate, 10)
     )
+
+
+def test_complete_comparison_writes_only_experiment_results(
+    tmp_path: Path, monkeypatch
+) -> None:
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Benchmark must not use the database")
+
+    monkeypatch.setattr(dr.global_pool, "open", forbidden)
+    monkeypatch.setattr(dr.global_pool, "connection", forbidden)
+    frame = article_frame()
+    frame.to_parquet(tmp_path / "articles.parquet", index=False)
+    protocol = {
+        "articles_sha256": benchmark.sha256(tmp_path / "articles.parquet"),
+        "article_count": len(frame),
+        "models": benchmark.MODELS,
+        "folds": benchmark.make_splits(
+            benchmark.frame_to_articles(frame), validation_size=2
+        ),
+    }
+    benchmark.write_json(tmp_path / "protocol.json", protocol)
+    vectors = np.ones((len(frame), 768), dtype=np.float32) / np.sqrt(768)
+    for key, (name, revision) in benchmark.MODELS.items():
+        destination = tmp_path / key
+        destination.mkdir()
+        for field in ["title", "body"]:
+            np.save(destination / f"{field}.npy", vectors)
+        np.save(destination / "article_ids.npy", frame.article_id.to_numpy())
+        benchmark.write_json(
+            destination / "metadata.json",
+            {
+                "protocol_sha256": benchmark.sha256(tmp_path / "protocol.json"),
+                "model": name,
+                "revision": revision,
+                "hashes": {
+                    name: benchmark.sha256(destination / name)
+                    for name in ["title.npy", "body.npy", "article_ids.npy"]
+                },
+            },
+        )
+    before = benchmark.sha256(tmp_path / "articles.parquet")
+    result = benchmark.compare(tmp_path, bootstrap_samples=2)
+    assert benchmark.sha256(tmp_path / "articles.parquet") == before
+    assert result["production_writes"] is False
+    assert result["deployment_eligible"] is False
+    assert (tmp_path / "predictions.npz").is_file()
+    assert json.loads((tmp_path / "results.json").read_text()) == result
+    for differences in result["candidate_minus_baseline"].values():
+        assert all(differences[metric] == 0 for metric in benchmark.METRICS)
