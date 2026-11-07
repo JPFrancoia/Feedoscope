@@ -27,9 +27,6 @@ train:
 infer:
 	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.llm_infer
 
-summarize:
-	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.summarize_articles
-
 warm_embeddings:
 	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.warm_relevance_embeddings
 

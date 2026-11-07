@@ -73,56 +73,6 @@ async def get_articles_for_embedding_warm(
     return [Article(**article) for article in data]
 
 
-async def get_latest_articles_for_summary(limit: int) -> list[Article]:
-    """Return the newest entries for one-line summary generation."""
-    if limit <= 0:
-        raise ValueError("limit must be positive")
-
-    query = _get_query_from_file("get_latest_articles_for_summary.sql")
-    async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.execute(query, {"limit": limit})
-        data = await cur.fetchall()
-    return [Article(**article) for article in data]
-
-
-async def get_recent_articles_for_summary(days: int) -> list[Article]:
-    """Return every unsummarized entry in the requested publication window."""
-    if days <= 0:
-        raise ValueError("days must be positive")
-
-    query = _get_query_from_file("get_recent_articles_for_summary.sql")
-    async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.execute(query, {"days": days})
-        data = await cur.fetchall()
-    return [Article(**article) for article in data]
-
-
-async def get_highest_scored_articles_for_summary(limit: int) -> list[Article]:
-    """Return the highest-scored entries for one-line summary generation."""
-    if limit <= 0:
-        raise ValueError("limit must be positive")
-
-    query = _get_query_from_file("get_highest_scored_articles_for_summary.sql")
-    async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.execute(query, {"limit": limit})
-        data = await cur.fetchall()
-    return [Article(**article) for article in data]
-
-
-async def update_one_line_summary(article_id: int, one_line_summary: str) -> None:
-    """Store one generated summary in the Miniflux entry row."""
-    if not one_line_summary:
-        raise ValueError("one_line_summary must not be empty")
-
-    query = _get_query_from_file("update_one_line_summary.sql")
-    async with global_pool.connection() as conn, conn.cursor() as cur:
-        await cur.execute(
-            query,
-            {"article_id": article_id, "one_line_summary": one_line_summary},
-        )
-        await conn.commit()
-
-
 async def get_read_articles_training(
     validation_size: int = 100,
 ) -> list[Article]:
