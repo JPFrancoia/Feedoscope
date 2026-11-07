@@ -283,12 +283,6 @@ def extract(output: Path, part: str, env_file: Path | None) -> None:
         raise RuntimeError(
             f"{failures} requests failed. Completed responses were saved. Rerun the same command to retry missing requests."
         ) from None
-    if part == "train":
-        base.write_json(
-            output / "training_complete.json",
-            {"responses_sha256": base.digest(path)},
-            replace=True,
-        )
 
 
 def matrix(output: Path, part: str) -> tuple[np.ndarray, np.ndarray, list[str]]:
