@@ -68,7 +68,7 @@ make down_all         # Roll back all migrations
 make pkg              # Build, tag, push to local registry (192.168.0.13:32000)
 ```
 
-Multi-stage Dockerfile with CUDA 12.8 support. No docker-compose.
+Multi-stage Dockerfile with CUDA 13 support. Torch supplies the CUDA runtime libraries. No docker-compose.
 
 ## Code Style Guidelines
 
