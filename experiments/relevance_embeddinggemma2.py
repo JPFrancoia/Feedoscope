@@ -314,7 +314,10 @@ def encode(
     )
     model_config = text_only_config(model_config, model_key)
     tokenizer = AutoTokenizer.from_pretrained(
-        model_name, revision=revision, cache_dir=cache
+        model_name,
+        revision=revision,
+        cache_dir=cache,
+        trust_remote_code=model_key == "pplx",
     )
     model, loading_info = AutoModel.from_pretrained(
         model_name,
