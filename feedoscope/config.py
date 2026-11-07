@@ -81,3 +81,6 @@ IMPORTANT_ARTICLE_WEIGHT = float(os.getenv("IMPORTANT_ARTICLE_WEIGHT", "20"))
 assert (
     math.isfinite(IMPORTANT_ARTICLE_WEIGHT) and IMPORTANT_ARTICLE_WEIGHT >= 1
 ), "IMPORTANT_ARTICLE_WEIGHT must be finite and at least 1"
+
+# Required only by the explicit Jev importance inference command.
+JEV_KEY = os.getenv("JEV_KEY", "")
