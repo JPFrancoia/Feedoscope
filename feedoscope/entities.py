@@ -34,3 +34,29 @@ class RelevanceInferenceResults(BaseModel):
     article_titles: list[str]
     scores: list[float]
     model_key: str
+
+
+class ImportancePrompt(BaseModel):
+    """One immutable prompt version and its fixed Jev model."""
+
+    id: int
+    prompt: dict[str, object]
+    created_at: AwareDatetime
+    model: str
+
+
+class ImportanceArticle(BaseModel):
+    """Only the article text needed for importance inference."""
+
+    entry_id: int
+    title: str
+    content: str
+
+
+class ImportanceResult(BaseModel):
+    """A validated Jev prediction, separate from manual feedback."""
+
+    is_important: bool
+    importance_probability: float = Field(ge=0, le=1, allow_inf_nan=False)
+    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
+    inferred_at: AwareDatetime

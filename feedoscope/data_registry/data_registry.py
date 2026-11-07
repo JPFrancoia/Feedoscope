@@ -14,7 +14,12 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
 from feedoscope import config
-from feedoscope.entities import Article
+from feedoscope.entities import (
+    Article,
+    ImportanceArticle,
+    ImportancePrompt,
+    ImportanceResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -475,3 +480,53 @@ async def upsert_relevance_embeddings(
                 for article_id, text_hash, embedding in rows
             ],
         )
+
+
+async def insert_importance_prompt(
+    prompt: dict[str, object], model: str
+) -> ImportancePrompt:
+    """Insert a new prompt version without changing earlier versions."""
+    query = _get_query_from_file("insert_importance_prompt.sql")
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(query, {"prompt": Jsonb(prompt), "model": model})
+        row = await cur.fetchone()
+    if row is None:
+        raise RuntimeError("Importance prompt insertion returned no row")
+    return ImportancePrompt(**row)
+
+
+async def get_latest_importance_prompt() -> ImportancePrompt:
+    """Get the highest prompt ID, or fail before inference if none exists."""
+    query = _get_query_from_file("get_latest_importance_prompt.sql")
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(query)
+        row = await cur.fetchone()
+    if row is None:
+        raise RuntimeError("No importance prompt exists. Import a prompt first.")
+    return ImportancePrompt(**row)
+
+
+async def get_importance_articles(entry_ids: list[int]) -> list[ImportanceArticle]:
+    """Read explicitly selected articles without feedback or source metadata."""
+    query = _get_query_from_file("get_importance_articles.sql")
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(query, {"entry_ids": entry_ids})
+        rows = await cur.fetchall()
+    return [ImportanceArticle(**row) for row in rows]
+
+
+async def upsert_entry_importance(
+    entry_id: int, prompt_id: int, result: ImportanceResult
+) -> bool:
+    """Store a prediction unless a newer version or response already exists."""
+    query = _get_query_from_file("upsert_entry_importance.sql")
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(
+            query,
+            {
+                "entry_id": entry_id,
+                "importance_prompt_id": prompt_id,
+                **result.model_dump(),
+            },
+        )
+        return cur.rowcount == 1

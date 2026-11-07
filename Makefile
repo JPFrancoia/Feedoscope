@@ -57,3 +57,10 @@ down_all:
 format:
 	uv run black .
 	uv run isort .
+
+.PHONY: importance_prompt importance_infer
+importance_prompt:
+	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.importance add-prompt $(ARGS)
+
+importance_infer:
+	LOGGING_CONFIG=dev_logging.conf uv run python -m feedoscope.importance infer $(ARGS)
