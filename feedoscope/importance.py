@@ -22,6 +22,9 @@ from feedoscope.entities import ImportanceArticle, ImportanceResult
 
 logger = logging.getLogger(__name__)
 REQUEST_BYTES = 30_000
+BUNDLE_BYTES = 60_000
+QUESTION_BYTES = 32_000
+BUNDLE_SIZE = 8
 CLASSES = {"important", "good_only"}
 RECENT_RUN_LOCK = 730114
 INPUT_USD_PER_MILLION = 0.042
@@ -93,6 +96,78 @@ def request_payload(
     return payload
 
 
+def bundle_payload(payloads: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build independent article questions within conservative context budgets."""
+    if not 1 <= len(payloads) <= BUNDLE_SIZE:
+        raise ValueError("A bundle needs one to eight articles")
+    first = payloads[0]
+    state = {"reader_profile": first["state"]["reader_profile"]}
+    questions = {}
+    for index, payload in enumerate(payloads):
+        if (
+            payload["model"] != first["model"]
+            or payload["state"]["reader_profile"] != state["reader_profile"]
+        ):
+            raise ValueError("Bundle model and profile must match")
+        question = payload["questions"]["importance"]
+        questions[f"article_{index}"] = {
+            **question,
+            "instructions": {
+                "instructions": question["instructions"],
+                "article": payload["state"]["article"],
+            },
+        }
+    result = {"model": first["model"], "state": state, "questions": questions}
+    if (
+        any(
+            len(
+                json.dumps({"state": state, "question": q}, ensure_ascii=False).encode()
+            )
+            > QUESTION_BYTES
+            for q in questions.values()
+        )
+        or len(json.dumps(result, ensure_ascii=False).encode()) > BUNDLE_BYTES
+    ):
+        raise ValueError("Bundle exceeds context budget")
+    return result
+
+
+def pack_requests(
+    requests: list[tuple[int, dict[str, Any]]],
+) -> list[list[tuple[int, dict[str, Any]]]]:
+    """Check every input and split bundles without further article truncation."""
+    batches = []
+    pending: list[tuple[int, dict[str, Any]]] = []
+    for item in requests:
+        bundle_payload([item[1]])
+        try:
+            bundle_payload([p for _, p in [*pending, item]])
+        except ValueError:
+            batches.append(pending)
+            pending = []
+        pending.append(item)
+    if pending:
+        batches.append(pending)
+    return batches
+
+
+def validate_answers(
+    response: Any, payload: dict[str, Any]
+) -> dict[str, ImportanceResult]:
+    """Check the complete response before any article result is stored."""
+    if not isinstance(response, dict) or not isinstance(response.get("answers"), dict):
+        raise ValueError("Malformed Jev response")
+    if set(response["answers"]) != set(payload["questions"]):
+        raise ValueError("Response question keys differ")
+    return {
+        key: validate_response(
+            {"model": response.get("model"), "answers": {"importance": answer}},
+            payload["model"],
+        )
+        for key, answer in response["answers"].items()
+    }
+
+
 def validate_response(response: Any, model: str) -> ImportanceResult:
     """Reject malformed responses before storing the returned probability and confidence."""
     try:
@@ -129,7 +204,7 @@ def validate_response(response: Any, model: str) -> ImportanceResult:
 
 def call_jev(
     payload: dict[str, Any], api_key: str, usage: dict[str, int] | None = None
-) -> ImportanceResult:
+) -> dict[str, ImportanceResult]:
     """Call Jev over verified HTTPS with bounded transient-error retries."""
     request = Request(
         "https://api.typesafe.ai/v1/systemone",
@@ -155,7 +230,7 @@ def call_jev(
                         usage[field] += count
                     else:
                         usage["missing_" + field] += 1
-            return validate_response(data, payload["model"])
+            return validate_answers(data, payload)
         except HTTPError as error:
             if usage is not None:
                 usage["failed_requests"] += 1
@@ -199,20 +274,24 @@ async def infer(entry_ids: list[int]) -> list[dict[str, Any]]:
         (article.entry_id, request_payload(article, version.prompt, version.model))
         for article in articles
     ]
+    batches = pack_requests(requests)
     results = []
-    for entry_id, payload in requests:
-        result = await asyncio.to_thread(call_jev, payload, config.JEV_KEY)
-        stored = await dr.upsert_entry_importance(entry_id, version.id, result)
-        row = {
-            "entry_id": entry_id,
-            "importance_prompt_id": version.id,
-            **result.model_dump(mode="json"),
-            "stored": stored,
-        }
-        results.append(row)
-        logger.info(
-            f"Importance entry {entry_id}: {result.is_important}, prompt {version.id}, stored={stored}"
-        )
+    for batch in batches:
+        payload = bundle_payload([p for _, p in batch])
+        answers = await asyncio.to_thread(call_jev, payload, config.JEV_KEY)
+        for index, (entry_id, _) in enumerate(batch):
+            result = answers[f"article_{index}"]
+            stored = await dr.upsert_entry_importance(entry_id, version.id, result)
+            row = {
+                "entry_id": entry_id,
+                "importance_prompt_id": version.id,
+                **result.model_dump(mode="json"),
+                "stored": stored,
+            }
+            results.append(row)
+            logger.info(
+                f"Importance entry {entry_id}: {result.is_important}, prompt {version.id}, stored={stored}"
+            )
     return results
 
 
@@ -266,27 +345,38 @@ async def infer_recent(days: int) -> None:
                 importance_prompt_id=version.id,
                 model=version.model,
             )
-            for entry_id, payload in requests:
-                if await dr.has_entry_importance(entry_id):
-                    summary["skipped"] += 1
+            batches = pack_requests(requests)
+            for batch in batches:
+                missing = []
+                for entry_id, prepared in batch:
+                    if await dr.has_entry_importance(entry_id):
+                        summary["skipped"] += 1
+                    else:
+                        missing.append((entry_id, prepared))
+                if not missing:
                     continue
-                result = await asyncio.to_thread(
+                payload = bundle_payload([p for _, p in missing])
+                answers = await asyncio.to_thread(
                     call_jev, payload, config.JEV_KEY, usage
                 )
-                stored = await dr.insert_entry_importance(entry_id, version.id, result)
-                summary["stored" if stored else "skipped"] += 1
-                print(
-                    json.dumps(
-                        {
-                            "entry_id": entry_id,
-                            "importance_prompt_id": version.id,
-                            **result.model_dump(mode="json"),
-                            "stored": stored,
-                        },
-                        allow_nan=False,
-                    ),
-                    flush=True,
-                )
+                for index, (entry_id, _) in enumerate(missing):
+                    result = answers[f"article_{index}"]
+                    stored = await dr.insert_entry_importance(
+                        entry_id, version.id, result
+                    )
+                    summary["stored" if stored else "skipped"] += 1
+                    print(
+                        json.dumps(
+                            {
+                                "entry_id": entry_id,
+                                "importance_prompt_id": version.id,
+                                **result.model_dump(mode="json"),
+                                "stored": stored,
+                            },
+                            allow_nan=False,
+                        ),
+                        flush=True,
+                    )
             summary["status"] = "complete"
     finally:
         summary.update(usage)

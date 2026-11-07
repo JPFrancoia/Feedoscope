@@ -42,6 +42,15 @@ def response(p: float = 0.9) -> dict[str, Any]:
     }
 
 
+def bundle_response(payload: dict[str, Any], p: float = 0.9) -> dict[str, Any]:
+    return {
+        "model": MODEL,
+        "answers": {
+            key: response(p)["answers"]["importance"] for key in payload["questions"]
+        },
+    }
+
+
 def version(id: int = 1) -> ImportancePrompt:
     return ImportancePrompt(
         id=id, prompt=prompt(), model=MODEL, created_at=dt.datetime.now(dt.UTC)
@@ -164,8 +173,8 @@ def test_http_retries_and_validates_the_success(
     monkeypatch.setattr(imp, "urlopen", calls)
     sleep = MagicMock()
     monkeypatch.setattr(imp.time, "sleep", sleep)
-    result = imp.call_jev({"model": MODEL}, "fake-key")
-    assert result.importance_probability == 0.9
+    result = imp.call_jev({"model": MODEL, "questions": {"importance": {}}}, "fake-key")
+    assert result["importance"].importance_probability == 0.9
     assert calls.call_count == 2
     request = calls.call_args.args[0]
     assert request.full_url == "https://api.typesafe.ai/v1/systemone"
@@ -182,7 +191,7 @@ def test_http_failure_does_not_disclose_response_body(
     )
     monkeypatch.setattr(imp, "urlopen", MagicMock(side_effect=error))
     with pytest.raises(RuntimeError, match="TypeSafe HTTP 401") as raised:
-        imp.call_jev({"model": MODEL}, "fake-key")
+        imp.call_jev({"model": MODEL, "questions": {"importance": {}}}, "fake-key")
     assert "private" not in str(raised.value)
     assert raised.value.__suppress_context__
 
@@ -192,7 +201,7 @@ def test_connection_retries_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(imp, "urlopen", calls)
     monkeypatch.setattr(imp.time, "sleep", MagicMock())
     with pytest.raises(RuntimeError, match="four attempts"):
-        imp.call_jev({"model": MODEL}, "fake-key")
+        imp.call_jev({"model": MODEL, "questions": {"importance": {}}}, "fake-key")
     assert calls.call_count == 4
 
 
@@ -211,7 +220,11 @@ def setup_infer(
     )
     write = AsyncMock(return_value=True)
     monkeypatch.setattr(imp.dr, "upsert_entry_importance", write)
-    call = MagicMock(return_value=imp.validate_response(response(), MODEL))
+    call = MagicMock(
+        side_effect=lambda payload, key: imp.validate_answers(
+            bundle_response(payload), payload
+        )
+    )
     monkeypatch.setattr(imp, "call_jev", call)
     return latest, write, call
 
@@ -226,15 +239,16 @@ def test_run_keeps_one_prompt_version_and_deduplicates_ids(
     assert isinstance(get_articles, AsyncMock)
     get_articles.assert_awaited_once_with([1, 2])
     assert [args.args[1] for args in write.await_args_list] == [1, 1]
-    assert len(rows) == 2 and call.call_count == 2
+    assert len(rows) == 2 and call.call_count == 1
 
 
 def test_failure_preserves_successes_without_writing_false(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _, write, call = setup_infer(monkeypatch)
+    monkeypatch.setattr(imp, "BUNDLE_SIZE", 1)
     call.side_effect = [
-        imp.validate_response(response(), MODEL),
+        {"article_0": imp.validate_response(response(), MODEL)},
         RuntimeError("failed"),
     ]
     with pytest.raises(RuntimeError, match="failed"):

@@ -10,7 +10,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from test_importance import MODEL, prompt, response
+from test_importance import MODEL, bundle_response, prompt, response
 
 from feedoscope import importance as imp
 from feedoscope.entities import ImportanceArticle, ImportancePrompt, ImportanceResult
@@ -51,12 +51,12 @@ def recent_setup(monkeypatch: pytest.MonkeyPatch) -> tuple[MagicMock, AsyncMock]
 
     def call(
         payload: dict[str, Any], key: str, usage: dict[str, int]
-    ) -> ImportanceResult:
+    ) -> dict[str, ImportanceResult]:
         usage["requests"] += 1
         usage["responses"] += 1
         usage["input_tokens"] += 100
         usage["output_tokens"] += 32
-        return imp.validate_response(response(), MODEL)
+        return imp.validate_answers(bundle_response(payload), payload)
 
     mocked = MagicMock(side_effect=call)
     monkeypatch.setattr(imp, "call_jev", mocked)
@@ -98,11 +98,12 @@ def test_recent_failure_keeps_success_and_prints_incomplete_cost(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     call, insert = recent_setup(monkeypatch)
+    monkeypatch.setattr(imp, "BUNDLE_SIZE", 1)
     success = call.side_effect
 
     def fail(
         payload: dict[str, Any], key: str, usage: dict[str, int]
-    ) -> ImportanceResult:
+    ) -> dict[str, ImportanceResult]:
         if call.call_count == 1:
             assert callable(success)
             return success(payload, key, usage)
@@ -178,7 +179,9 @@ def test_call_counts_reported_tokens(
         ],
         0,
     )
-    imp.call_jev({"model": MODEL}, "synthetic-key", totals)
+    imp.call_jev(
+        {"model": MODEL, "questions": {"importance": {}}}, "synthetic-key", totals
+    )
     assert totals["requests"] == totals["responses"] == 1
     expected = usage.get("input_tokens")
     valid = type(expected) is int
@@ -219,7 +222,7 @@ def test_missing_output_usage_is_not_complete(
 
     def missing(
         payload: dict[str, Any], key: str, usage: dict[str, int]
-    ) -> ImportanceResult:
+    ) -> dict[str, ImportanceResult]:
         assert callable(original)
         result = original(payload, key, usage)
         usage["missing_output_tokens"] += 1
@@ -229,4 +232,4 @@ def test_missing_output_usage_is_not_complete(
     asyncio.run(imp.infer_recent(7))
     summary = json.loads(capsys.readouterr().out.splitlines()[-1])
     assert not summary["usage_complete"]
-    assert summary["missing_output_tokens"] == 2
+    assert summary["missing_output_tokens"] == 1
