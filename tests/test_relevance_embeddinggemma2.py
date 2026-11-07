@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 
 from experiments import relevance_embeddinggemma2 as benchmark
 
@@ -167,8 +168,9 @@ def test_paired_bootstrap_is_deterministic_and_zero_for_identical_scores() -> No
     )
 
 
+@pytest.mark.parametrize("candidate", ["gemma2", "pplx"])
 def test_complete_comparison_writes_only_experiment_results(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, candidate: str
 ) -> None:
     def forbidden(*args, **kwargs):
         raise AssertionError("Benchmark must not use the database")
@@ -180,14 +182,21 @@ def test_complete_comparison_writes_only_experiment_results(
     protocol = {
         "articles_sha256": benchmark.sha256(tmp_path / "articles.parquet"),
         "article_count": len(frame),
-        "models": benchmark.MODELS,
+        "models": {key: benchmark.MODELS[key] for key in ("gemma1", candidate)},
+        "candidate": candidate,
+        "prompt": "task: classification | query: ",
         "folds": benchmark.make_splits(
             benchmark.frame_to_articles(frame), validation_size=2
         ),
     }
     benchmark.write_json(tmp_path / "protocol.json", protocol)
     vectors = np.ones((len(frame), 768), dtype=np.float32) / np.sqrt(768)
-    for key, (name, revision) in benchmark.MODELS.items():
+    for key in ("gemma1", candidate):
+        dimension = benchmark.MODEL_DIMENSIONS[key]
+        vectors = np.ones((len(frame), dimension), dtype=np.float32) / np.sqrt(
+            dimension
+        )
+        name, revision = benchmark.MODELS[key]
         destination = tmp_path / key
         destination.mkdir()
         for field in ["title", "body"]:
@@ -199,6 +208,7 @@ def test_complete_comparison_writes_only_experiment_results(
                 "protocol_sha256": benchmark.sha256(tmp_path / "protocol.json"),
                 "model": name,
                 "revision": revision,
+                "empty_fields": {"title": [], "body": []},
                 "hashes": {
                     name: benchmark.sha256(destination / name)
                     for name in ["title.npy", "body.npy", "article_ids.npy"]
@@ -214,3 +224,56 @@ def test_complete_comparison_writes_only_experiment_results(
     assert json.loads((tmp_path / "results.json").read_text()) == result
     for differences in result["candidate_minus_baseline"].values():
         assert all(differences[metric] == 0 for metric in benchmark.METRICS)
+
+
+def test_pplx_native_pooling_quantization_and_truncation() -> None:
+    class FakeModel:
+        device = "cpu"
+
+        def prepare_inputs(self, documents, task):
+            assert documents == [["a long article"], [""]]
+            assert task == "document"
+            return {
+                "input_ids": torch.ones(2, 700, dtype=torch.long),
+                "attention_mask": torch.ones(2, 700, dtype=torch.long),
+                "chunk_token_spans": torch.tensor([[[2, 700]], [[0, 0]]]),
+                "chunk_mask": torch.ones(2, 1, dtype=torch.bool),
+            }
+
+        def _pool(self, features, task):
+            assert task == "document"
+            assert features["input_ids"].shape == (2, 512)
+            assert features["attention_mask"].shape == (2, 512)
+            assert features["chunk_token_spans"].tolist() == [[[2, 512]], [[0, 0]]]
+            projected = torch.linspace(-1, 1, 1024).reshape(1, 1, -1).repeat(2, 1, 1)
+            projected[1] = 0
+            return projected
+
+    vectors = benchmark.encode_pplx_batch(FakeModel(), ["a long article", ""], 512)
+    projected = torch.linspace(-1, 1, 1024)
+    expected = torch.round(torch.tanh(projected) * 127).clamp(-128, 127)
+    expected = torch.nn.functional.normalize(expected, dim=0).numpy()
+    np.testing.assert_array_equal(vectors[0], expected)
+    benchmark.validate_vectors(vectors, 2, 1024, empty_rows=[1])
+    with pytest.raises(ValueError, match="unit length"):
+        benchmark.validate_vectors(vectors, 2, 1024)
+    with pytest.raises(ValueError):
+        benchmark.validate_vectors(vectors, 2, 768, empty_rows=[1])
+
+
+def test_pplx_protocol_pins_the_candidate_revision(tmp_path: Path) -> None:
+    frame = article_frame()
+    frame.to_parquet(tmp_path / "articles.parquet", index=False)
+    protocol = {
+        "articles_sha256": benchmark.sha256(tmp_path / "articles.parquet"),
+        "article_count": len(frame),
+        "models": {key: benchmark.MODELS[key] for key in ("gemma1", "pplx")},
+        "candidate": "pplx",
+    }
+    benchmark.write_json(tmp_path / "protocol.json", protocol)
+    loaded, _ = benchmark.read_input(tmp_path)
+    assert loaded.article_id.tolist() == frame.article_id.tolist()
+    protocol["models"]["pplx"] = [benchmark.MODELS["pplx"][0], "changed"]
+    (tmp_path / "protocol.json").write_text(json.dumps(protocol))
+    with pytest.raises(ValueError, match="revisions"):
+        benchmark.read_input(tmp_path)

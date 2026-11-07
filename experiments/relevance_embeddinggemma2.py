@@ -1,4 +1,4 @@
-"""Compare frozen EmbeddingGemma encoders without database access."""
+"""Compare frozen relevance encoders without database access."""
 
 import argparse
 import hashlib
@@ -38,6 +38,11 @@ MODELS = {
         "f9972ac22e696a105c482202646979e33e4b5a1e",
     ),
 }
+MODELS["pplx"] = (
+    "perplexity-ai/pplx-embed-v2-context-0.6b",
+    "6d1fddab0a18478acc0a51edd1e81333fe441095",
+)
+MODEL_DIMENSIONS = {"gemma1": 768, "gemma2": 768, "pplx": 1024}
 SOURCE_COLUMNS = [
     "article_id",
     "published_at",
@@ -146,10 +151,12 @@ def make_splits(
     return folds
 
 
-def prepare(snapshot: Path, output: Path) -> None:
+def prepare(snapshot: Path, output: Path, candidate: str = "gemma2") -> None:
     """Create a minimal immutable input for both encoders."""
     if output.resolve().is_relative_to(snapshot.resolve()):
         raise ValueError("Output must be outside the source snapshot")
+    if candidate not in ("gemma2", "pplx"):
+        raise ValueError("Unsupported candidate")
     hashes = verify_snapshot(snapshot)
     manifest = json.loads((snapshot / "manifest.json").read_text())
     frame = pd.read_parquet(snapshot / "articles.parquet", columns=SOURCE_COLUMNS)
@@ -167,7 +174,21 @@ def prepare(snapshot: Path, output: Path) -> None:
             "snapshot_time_utc": manifest["snapshot_time_utc"],
             "articles_sha256": sha256(output / "articles.parquet"),
             "article_count": len(frame),
-            "models": MODELS,
+            "models": {key: MODELS[key] for key in ("gemma1", candidate)},
+            "candidate": candidate,
+            "candidate_contract": (
+                {
+                    "prompt": "[D] ",
+                    "pooling": "document chunk mean and contextual_projection",
+                    "output_quantization": "native tanh int8 returned as float32",
+                    "normalized": True,
+                    "empty_fields": "native zero vectors",
+                    "vision": "removed on CPU before GPU transfer",
+                    "dimension": 1024,
+                }
+                if candidate == "pplx"
+                else {"dimension": 768}
+            ),
             "folds": folds,
             "dtype": "float32",
             "prompt": "task: classification | query: ",
@@ -190,7 +211,10 @@ def read_input(root: Path) -> tuple[pd.DataFrame, dict]:
     protocol = json.loads((root / "protocol.json").read_text())
     if sha256(root / "articles.parquet") != protocol["articles_sha256"]:
         raise ValueError("Benchmark input checksum mismatch")
-    if protocol["models"] != {key: list(value) for key, value in MODELS.items()}:
+    candidate = protocol.get("candidate", "gemma2")
+    if candidate not in ("gemma2", "pplx") or protocol["models"] != {
+        key: list(MODELS[key]) for key in ("gemma1", candidate)
+    }:
         raise ValueError("Model revisions differ from the benchmark protocol")
     frame = pd.read_parquet(root / "articles.parquet")
     if list(frame.columns) != SOURCE_COLUMNS or len(frame) != protocol["article_count"]:
@@ -206,12 +230,32 @@ def text_only_config(config: object, model_key: str) -> object:
     return config
 
 
-def validate_vectors(vectors: np.ndarray, count: int) -> None:
+def validate_vectors(
+    vectors: np.ndarray,
+    count: int,
+    dimension: int = 768,
+    empty_rows: list[int] | None = None,
+) -> None:
     """Reject incomplete, nonfinite, or unnormalized embedding arrays."""
-    if vectors.shape != (count, 768) or not np.isfinite(vectors).all():
-        raise ValueError("Embeddings must be finite 768-value vectors")
-    if not np.allclose(np.linalg.norm(vectors, axis=1), 1, atol=1e-4):
-        raise ValueError("Embeddings must have unit length")
+    if vectors.shape != (count, dimension) or not np.isfinite(vectors).all():
+        raise ValueError(f"Embeddings must be finite {dimension}-value vectors")
+    expected_norms = np.ones(count)
+    if empty_rows:
+        expected_norms[empty_rows] = 0
+    if not np.allclose(np.linalg.norm(vectors, axis=1), expected_norms, atol=1e-4):
+        raise ValueError("Embeddings must have unit length, except known empty fields")
+
+
+def encode_pplx_batch(model: object, texts: list[str], limit: int) -> np.ndarray:
+    """Use native document pooling and quantization with a bounded token span."""
+    features = model.prepare_inputs([[text] for text in texts], task="document")
+    features["input_ids"] = features["input_ids"][:, :limit]
+    features["attention_mask"] = features["attention_mask"][:, :limit]
+    features["chunk_token_spans"] = features["chunk_token_spans"].clamp(max=limit)
+    features = {key: value.to(model.device) for key, value in features.items()}
+    projected = model._pool(features, "document")
+    vectors = torch.round(torch.tanh(projected) * 127).clamp(-128, 127)
+    return torch.nn.functional.normalize(vectors, dim=-1)[:, 0].cpu().numpy()
 
 
 def encode(
@@ -228,7 +272,10 @@ def encode(
         frame = pd.concat(
             [frame.head(2), frame.loc[frame.content.str.len().nlargest(2).index]]
         ).drop_duplicates("article_id")
+    if model_key not in protocol["models"]:
+        raise ValueError("Encoder is not part of this benchmark protocol")
     articles = frame_to_articles(frame)
+    dimension = MODEL_DIMENSIONS[model_key]
     model_name, revision = MODELS[model_key]
     destination = root / (f"{model_key}-smoke" if smoke else model_key)
     destination.mkdir(exist_ok=False)
@@ -236,7 +283,10 @@ def encode(
     torch.cuda.reset_peak_memory_stats()
     load_start = time.monotonic()
     model_config = AutoConfig.from_pretrained(
-        model_name, revision=revision, cache_dir=cache
+        model_name,
+        revision=revision,
+        cache_dir=cache,
+        trust_remote_code=model_key == "pplx",
     )
     model_config = text_only_config(model_config, model_key)
     tokenizer = AutoTokenizer.from_pretrained(
@@ -250,6 +300,7 @@ def encode(
         dtype=torch.float32,
         attn_implementation="sdpa",
         output_loading_info=True,
+        trust_remote_code=model_key == "pplx",
     )
     if loading_info["missing_keys"] or loading_info.get("mismatched_keys"):
         raise ValueError("Model weights do not match the pinned architecture")
@@ -257,34 +308,56 @@ def encode(
         model.vision_tower is not None or model.audio_tower is not None
     ):
         raise ValueError("Unused modality encoders must remain disabled")
+    removed_parameters = 0
+    if model_key == "pplx":
+        removed_parameters = sum(p.numel() for p in model.visual.parameters())
+        model.visual = None
+        model.tokenizer = tokenizer
+        if any(name.startswith("visual.") for name, _ in model.named_parameters()):
+            raise ValueError("Image encoder parameters must remain absent")
     model = model.to("cuda").eval()
     parameter_count = sum(p.numel() for p in model.parameters())
     load_seconds = time.monotonic() - load_start
     field_times = {}
+    empty_fields = {}
     torch.cuda.synchronize()
     encode_start = time.monotonic()
     for field, limit in [("title", 512), ("body", 2048)]:
         texts = relevance_embedding.prepare_articles_text(articles, field)
+        if model_key == "pplx":
+            prompt = protocol["prompt"]
+            if any(not text.startswith(prompt) for text in texts):
+                raise ValueError("Unexpected field preparation prompt")
+            texts = [text[len(prompt) :] for text in texts]
+        empty_fields[field] = (
+            [index for index, text in enumerate(texts) if not text]
+            if model_key == "pplx"
+            else []
+        )
         order = sorted(range(len(texts)), key=lambda index: len(texts[index]))
-        vectors = np.empty((len(texts), 768), dtype=np.float32)
+        vectors = np.empty((len(texts), dimension), dtype=np.float32)
         field_start = time.monotonic()
         next_log = 0
         with torch.inference_mode():
             for start in range(0, len(order), batch_size):
                 indices = order[start : start + batch_size]
-                inputs = tokenizer(
-                    [texts[index] for index in indices],
-                    padding=True,
-                    truncation=True,
-                    max_length=limit,
-                    return_tensors="pt",
-                ).to("cuda")
-                outputs = model(**inputs)
-                pooled = relevance_embedding.mean_pool(
-                    outputs.last_hidden_state.float(), inputs["attention_mask"]
-                )
-                pooled = torch.nn.functional.normalize(pooled, dim=1)
-                vectors[indices] = pooled.cpu().numpy()
+                batch = [texts[index] for index in indices]
+                if model_key == "pplx":
+                    vectors[indices] = encode_pplx_batch(model, batch, limit)
+                else:
+                    inputs = tokenizer(
+                        batch,
+                        padding=True,
+                        truncation=True,
+                        max_length=limit,
+                        return_tensors="pt",
+                    ).to("cuda")
+                    outputs = model(**inputs)
+                    pooled = relevance_embedding.mean_pool(
+                        outputs.last_hidden_state.float(), inputs["attention_mask"]
+                    )
+                    pooled = torch.nn.functional.normalize(pooled, dim=1)
+                    vectors[indices] = pooled.cpu().numpy()
                 completed = start + len(indices)
                 if completed >= next_log or completed == len(order):
                     elapsed = time.monotonic() - field_start
@@ -296,7 +369,7 @@ def encode(
                     next_log = completed + max(1, len(order) // 20)
         torch.cuda.synchronize()
         field_times[field] = time.monotonic() - field_start
-        validate_vectors(vectors, len(articles))
+        validate_vectors(vectors, len(articles), dimension, empty_fields[field])
         np.save(destination / f"{field}.npy", vectors, allow_pickle=False)
     torch.cuda.synchronize()
     np.save(
@@ -310,7 +383,14 @@ def encode(
             "protocol_sha256": sha256(root / "protocol.json"),
             "input_sha256": protocol["articles_sha256"],
             "parameter_count": parameter_count,
-            "disabled_encoders": ["vision", "audio"] if model_key == "gemma2" else [],
+            "disabled_encoders": (
+                ["vision", "audio"]
+                if model_key == "gemma2"
+                else ["vision"] if model_key == "pplx" else []
+            ),
+            "removed_parameters": removed_parameters,
+            "dimension": dimension,
+            "empty_fields": empty_fields,
             "batch_size": batch_size,
             "dtype": "float32",
             "gpu": torch.cuda.get_device_name(),
@@ -347,8 +427,21 @@ def load_vectors(
         raise ValueError("Embedding article IDs do not match the input order")
     title = np.load(directory / "title.npy", allow_pickle=False)
     body = np.load(directory / "body.npy", allow_pickle=False)
-    validate_vectors(title, len(ids))
-    validate_vectors(body, len(ids))
+    dimension = MODEL_DIMENSIONS[key]
+    empty_fields = metadata.get("empty_fields", {})
+    if key == "pplx":
+        frame, protocol = read_input(root)
+        articles = frame_to_articles(frame)
+        expected_empty = {}
+        for field in ("title", "body"):
+            texts = relevance_embedding.prepare_articles_text(articles, field)
+            expected_empty[field] = [
+                index for index, text in enumerate(texts) if text == protocol["prompt"]
+            ]
+        if empty_fields != expected_empty:
+            raise ValueError("Empty vector rows differ from the input fields")
+    validate_vectors(title, len(ids), dimension, empty_fields.get("title"))
+    validate_vectors(body, len(ids), dimension, empty_fields.get("body"))
     return title, body, metadata
 
 
@@ -391,7 +484,8 @@ def compare(root: Path, bootstrap_samples: int = 10000) -> dict:
     position = {int(article_id): index for index, article_id in enumerate(ids)}
     results = {}
     predictions = {}
-    for key in MODELS:
+    candidate = protocol.get("candidate", "gemma2")
+    for key in protocol["models"]:
         title, body, metadata = load_vectors(root, key, ids)
         results[key] = {"encoder": metadata, "folds": {}}
         predictions[key] = {}
@@ -438,7 +532,7 @@ def compare(root: Path, bootstrap_samples: int = 10000) -> dict:
         )
         differences[name] = {
             metric: (
-                results["gemma2"]["folds"][name]["metrics"][metric]
+                results[candidate]["folds"][name]["metrics"][metric]
                 - results["gemma1"]["folds"][name]["metrics"][metric]
             )
             for metric in METRICS
@@ -446,7 +540,7 @@ def compare(root: Path, bootstrap_samples: int = 10000) -> dict:
         differences[name]["paired_bootstrap"] = bootstrap_differences(
             truth,
             predictions["gemma1"][name],
-            predictions["gemma2"][name],
+            predictions[candidate][name],
             bootstrap_samples,
         )
     with (root / "predictions.npz").open("xb") as stream:
@@ -454,7 +548,7 @@ def compare(root: Path, bootstrap_samples: int = 10000) -> dict:
             stream,
             **{
                 f"{key}_{fold['name']}": predictions[key][fold["name"]]
-                for key in MODELS
+                for key in protocol["models"]
                 for fold in protocol["folds"]
             },
         )
@@ -481,6 +575,9 @@ def main() -> None:
     prepare_parser = subparsers.add_parser("prepare")
     prepare_parser.add_argument("--snapshot", type=Path, required=True)
     prepare_parser.add_argument("--output", type=Path, required=True)
+    prepare_parser.add_argument(
+        "--candidate", choices=("gemma2", "pplx"), default="gemma2"
+    )
     encode_parser = subparsers.add_parser("encode")
     encode_parser.add_argument("--root", type=Path, required=True)
     encode_parser.add_argument("--model", choices=MODELS, required=True)
@@ -490,7 +587,7 @@ def main() -> None:
     compare_parser.add_argument("--root", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "prepare":
-        prepare(args.snapshot, args.output)
+        prepare(args.snapshot, args.output, args.candidate)
     elif args.command == "encode":
         encode(args.root, args.model, args.smoke, args.batch_size)
     else:
