@@ -106,6 +106,7 @@ def test_export_snapshot_preserves_rows_and_uses_read_only_access(
     assert pq.read_table(output / "articles.parquet").equals(
         pa.Table.from_pylist(rows, schema=snapshot.SCHEMA)
     )
+    assert "one_line_summary" not in pq.read_schema(output / "articles.parquet").names
     manifest = json.loads((output / "manifest.json").read_text())
     assert manifest["source_counts"] == {
         "articles": 12,

@@ -24,7 +24,6 @@ SELECT
     ) AS user_tags,
     e.comments_url,
     e.reading_time,
-    e.one_line_summary,
     e.score,
     e.raw_relevance_score,
     f.title AS feed_name,

@@ -49,7 +49,6 @@ SCHEMA = pa.schema(
         ("user_tags", pa.list_(pa.string())),
         ("comments_url", pa.string()),
         ("reading_time", pa.int64()),
-        ("one_line_summary", pa.string()),
         ("score", pa.int64()),
         ("raw_relevance_score", pa.float64()),
         ("feed_name", pa.string()),
