@@ -11,3 +11,6 @@ experiments/
 *saved_models*
 *models*
 .python-version
+
+# Keep private article snapshots and experiment outputs out of image builds.
+artifacts/

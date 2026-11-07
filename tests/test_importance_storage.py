@@ -227,3 +227,66 @@ def test_registry_latest_prompt_and_prediction_order(
                 }
 
     asyncio.run(check())
+
+
+def test_recent_selection_skips_any_version_and_preserves_records(
+    database: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Check real publication boundaries, insert-only storage, and run exclusion."""
+    from feedoscope import importance
+
+    async def check() -> None:
+        until = dt.datetime(2026, 11, 7, tzinfo=dt.UTC)
+        async with AsyncConnectionPool(
+            database, open=False, kwargs={"row_factory": dict_row}
+        ) as pool:
+            monkeypatch.setattr(dr, "global_pool", pool)
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "alter table entries add column published_at timestamptz"
+                )
+                await conn.execute("update entries set published_at=%s", (until,))
+                await conn.execute(
+                    "insert into entries (id,title,content,status,published_at) values (4,'Boundary','Text','read',%s),(5,'Too old','Text','unread',%s),(6,'Future','Text','unread',%s)",
+                    (
+                        until - dt.timedelta(days=7),
+                        until - dt.timedelta(days=7, seconds=1),
+                        until + dt.timedelta(seconds=1),
+                    ),
+                )
+            old = await dr.insert_importance_prompt(PROMPT, "jev-1.13.0")
+            latest = await dr.insert_importance_prompt(PROMPT, MODEL)
+            result = ImportanceResult(
+                is_important=True,
+                importance_probability=0.9,
+                confidence=0.8,
+                inferred_at=until,
+            )
+            assert await dr.insert_entry_importance(1, old.id, result)
+            assert not await dr.insert_entry_importance(1, latest.id, result)
+            assert await dr.has_entry_importance(1)
+            assert not await dr.has_entry_importance(2)
+            assert [
+                a.entry_id
+                for a in await dr.get_recent_missing_importance_articles(7, until)
+            ] == [2, 4]
+            async with pool.connection() as conn:
+                cursor = await conn.execute(
+                    "select importance_prompt_id from entries_importance where entry_id=1"
+                )
+                assert await cursor.fetchone() == {"importance_prompt_id": old.id}
+                await conn.execute(
+                    "select pg_advisory_xact_lock(%s)", (importance.RECENT_RUN_LOCK,)
+                )
+                monkeypatch.setattr(importance.config, "JEV_KEY", "synthetic")
+                with pytest.raises(RuntimeError, match="Another recent"):
+                    await importance.infer_recent(7)
+            # The lock is free after its transaction ends, including after an error.
+            async with pool.connection() as conn:
+                cursor = await conn.execute(
+                    "select pg_try_advisory_xact_lock(%s) as acquired",
+                    (importance.RECENT_RUN_LOCK,),
+                )
+                assert await cursor.fetchone() == {"acquired": True}
+
+    asyncio.run(check())
