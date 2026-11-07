@@ -95,7 +95,7 @@ def test_recent_skips_records_added_after_selection(
 
 
 def test_recent_failure_keeps_success_and_prints_incomplete_cost(
-    monkeypatch, capsys
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     call, insert = recent_setup(monkeypatch)
     success = call.side_effect
