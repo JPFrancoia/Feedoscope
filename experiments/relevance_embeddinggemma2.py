@@ -248,10 +248,34 @@ def validate_vectors(
 
 def encode_pplx_batch(model: object, texts: list[str], limit: int) -> np.ndarray:
     """Use native document pooling and quantization with a bounded token span."""
-    features = model.prepare_inputs([[text] for text in texts], task="document")
-    features["input_ids"] = features["input_ids"][:, :limit]
-    features["attention_mask"] = features["attention_mask"][:, :limit]
-    features["chunk_token_spans"] = features["chunk_token_spans"].clamp(max=limit)
+    prefix = model.config.document_prefix
+    features = model.tokenizer(
+        [prefix + text for text in texts],
+        padding=True,
+        truncation=True,
+        max_length=limit,
+        split_special_tokens=True,
+        return_tensors="pt",
+        return_token_type_ids=False,
+        return_offsets_mapping=True,
+    )
+    offsets = features.pop("offset_mapping")
+    spans = torch.zeros((len(texts), 1, 2), dtype=torch.long)
+    for row, text in enumerate(texts):
+        starts, ends = offsets[row].unbind(dim=-1)
+        valid = features["attention_mask"][row].bool() & (ends > starts)
+        indices = (
+            (valid & (starts < len(prefix) + len(text)) & (ends > len(prefix)))
+            .nonzero()
+            .flatten()
+        )
+        if indices.numel():
+            spans[row, 0, 0] = indices[0]
+            spans[row, 0, 1] = indices[-1] + 1
+        elif text:
+            raise ValueError("Nonempty document has no tokens after truncation")
+    features["chunk_token_spans"] = spans
+    features["chunk_mask"] = torch.ones((len(texts), 1), dtype=torch.bool)
     features = {key: value.to(model.device) for key, value in features.items()}
     projected = model._pool(features, "document")
     vectors = torch.round(torch.tanh(projected) * 127).clamp(-128, 127)

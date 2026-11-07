@@ -229,27 +229,40 @@ def test_complete_comparison_writes_only_experiment_results(
 def test_pplx_native_pooling_quantization_and_truncation() -> None:
     class FakeModel:
         device = "cpu"
+        config = SimpleNamespace(document_prefix="[D] ")
 
-        def prepare_inputs(self, documents, task):
-            assert documents == [["a long article"], [""]]
-            assert task == "document"
+        def prepare_inputs(self, *args, **kwargs):
+            raise AssertionError("Do not use unbounded native input preparation")
+
+        def tokenizer(self, texts, **kwargs):
+            assert len(texts[0]) > 262144
+            assert texts[1] == "[D] "
+            assert kwargs["max_length"] == 512
+            assert kwargs["truncation"] is True
+            assert kwargs["split_special_tokens"] is True
+            offsets = torch.zeros(2, 512, 2, dtype=torch.long)
+            offsets[0, :, 0] = torch.arange(512)
+            offsets[0, :, 1] = torch.arange(1, 513)
+            offsets[1, :4, 0] = torch.arange(4)
+            offsets[1, :4, 1] = torch.arange(1, 5)
+            mask = torch.ones(2, 512, dtype=torch.long)
+            mask[1, 4:] = 0
             return {
-                "input_ids": torch.ones(2, 700, dtype=torch.long),
-                "attention_mask": torch.ones(2, 700, dtype=torch.long),
-                "chunk_token_spans": torch.tensor([[[2, 700]], [[0, 0]]]),
-                "chunk_mask": torch.ones(2, 1, dtype=torch.bool),
+                "input_ids": torch.ones(2, 512, dtype=torch.long),
+                "attention_mask": mask,
+                "offset_mapping": offsets,
             }
 
         def _pool(self, features, task):
             assert task == "document"
             assert features["input_ids"].shape == (2, 512)
             assert features["attention_mask"].shape == (2, 512)
-            assert features["chunk_token_spans"].tolist() == [[[2, 512]], [[0, 0]]]
+            assert features["chunk_token_spans"].tolist() == [[[4, 512]], [[0, 0]]]
             projected = torch.linspace(-1, 1, 1024).reshape(1, 1, -1).repeat(2, 1, 1)
             projected[1] = 0
             return projected
 
-    vectors = benchmark.encode_pplx_batch(FakeModel(), ["a long article", ""], 512)
+    vectors = benchmark.encode_pplx_batch(FakeModel(), ["a" * 300000, ""], 512)
     projected = torch.linspace(-1, 1, 1024)
     expected = torch.round(torch.tanh(projected) * 127).clamp(-128, 127)
     expected = torch.nn.functional.normalize(expected, dim=0).numpy()
