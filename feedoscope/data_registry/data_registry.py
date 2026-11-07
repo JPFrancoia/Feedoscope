@@ -530,3 +530,42 @@ async def upsert_entry_importance(
             },
         )
         return cur.rowcount == 1
+
+
+async def get_recent_missing_importance_articles(
+    days: int, until: datetime.datetime
+) -> list[ImportanceArticle]:
+    """Read the fixed publication window and exclude every existing prediction."""
+    query = _get_query_from_file("get_recent_missing_importance_articles.sql")
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(query, {"days": days, "until": until})
+        rows = await cur.fetchall()
+    return [ImportanceArticle(**row) for row in rows]
+
+
+async def has_entry_importance(entry_id: int) -> bool:
+    """Check for any stored prediction without regard to prompt or model."""
+    async with global_pool.connection() as conn:
+        cursor = await conn.execute(
+            _get_query_from_file("has_entry_importance.sql"),
+            {"entry_id": entry_id},
+        )
+        row = await cursor.fetchone()
+    return bool(row and row["found"])
+
+
+async def insert_entry_importance(
+    entry_id: int, prompt_id: int, result: ImportanceResult
+) -> bool:
+    """Insert a missing prediction without replacing an existing record."""
+    query = _get_query_from_file("insert_entry_importance.sql")
+    async with global_pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(
+            query,
+            {
+                "entry_id": entry_id,
+                "importance_prompt_id": prompt_id,
+                **result.model_dump(),
+            },
+        )
+        return cur.rowcount == 1

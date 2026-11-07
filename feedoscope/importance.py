@@ -23,6 +23,8 @@ from feedoscope.entities import ImportanceArticle, ImportanceResult
 logger = logging.getLogger(__name__)
 REQUEST_BYTES = 30_000
 CLASSES = {"important", "good_only"}
+RECENT_RUN_LOCK = 730114
+INPUT_USD_PER_MILLION = 0.042
 
 
 def validate_prompt(prompt: object, model: str) -> None:
@@ -125,7 +127,9 @@ def validate_response(response: Any, model: str) -> ImportanceResult:
         raise ValueError("Malformed Jev response") from None
 
 
-def call_jev(payload: dict[str, Any], api_key: str) -> ImportanceResult:
+def call_jev(
+    payload: dict[str, Any], api_key: str, usage: dict[str, int] | None = None
+) -> ImportanceResult:
     """Call Jev over verified HTTPS with bounded transient-error retries."""
     request = Request(
         "https://api.typesafe.ai/v1/systemone",
@@ -137,22 +141,43 @@ def call_jev(payload: dict[str, Any], api_key: str) -> ImportanceResult:
         method="POST",
     )
     for attempt in range(4):
+        if usage is not None:
+            usage["requests"] += 1
         try:
             with urlopen(request, timeout=120) as response:
                 data = json.load(response)
+            if usage is not None:
+                usage["responses"] += 1
+                reported = data.get("usage", {}) if isinstance(data, dict) else {}
+                for field in ("input_tokens", "output_tokens"):
+                    count = reported.get(field) if isinstance(reported, dict) else None
+                    if type(count) is int and count >= 0:
+                        usage[field] += count
+                    else:
+                        usage["missing_" + field] += 1
             return validate_response(data, payload["model"])
         except HTTPError as error:
+            if usage is not None:
+                usage["failed_requests"] += 1
             status = error.code
             error.close()
             if status not in (429, 500, 502, 503, 504) or attempt == 3:
                 raise RuntimeError(f"TypeSafe HTTP {status}") from None
         except (URLError, TimeoutError):
+            if usage is not None:
+                usage["failed_requests"] += 1
             if attempt == 3:
                 raise RuntimeError(
                     "TypeSafe connection failed after four attempts"
                 ) from None
         except json.JSONDecodeError:
+            if usage is not None:
+                usage["failed_requests"] += 1
             raise ValueError("TypeSafe returned invalid JSON") from None
+        except ValueError:
+            if usage is not None:
+                usage["failed_requests"] += 1
+            raise
         time.sleep(2 ** (attempt + 1))
     raise RuntimeError("TypeSafe retry limit reached")
 
@@ -191,6 +216,93 @@ async def infer(entry_ids: list[int]) -> list[dict[str, Any]]:
     return results
 
 
+async def infer_recent(days: int) -> None:
+    """Classify recent missing articles once and print usage even after failure."""
+    if type(days) is not int or days <= 0:
+        raise ValueError("Days must be a positive integer")
+    if not config.JEV_KEY:
+        raise ValueError("Set JEV_KEY before importance inference")
+    started = time.monotonic()
+    until = dt.datetime.now(dt.UTC)
+    usage = dict.fromkeys(
+        [
+            "requests",
+            "responses",
+            "input_tokens",
+            "output_tokens",
+            "missing_input_tokens",
+            "missing_output_tokens",
+            "failed_requests",
+        ],
+        0,
+    )
+    summary: dict[str, Any] = {
+        "type": "importance_summary",
+        "days": days,
+        "until": until.isoformat(),
+        "status": "failed",
+        "selected": 0,
+        "stored": 0,
+        "skipped": 0,
+    }
+    try:
+        # The transaction releases this lock on success, failure, or connection loss.
+        async with dr.global_pool.connection() as conn:
+            cursor = await conn.execute(
+                "select pg_try_advisory_xact_lock(%s) as acquired", (RECENT_RUN_LOCK,)
+            )
+            row = await cursor.fetchone()
+            if not row or not row["acquired"]:
+                raise RuntimeError("Another recent importance run is active")
+            version = await dr.get_latest_importance_prompt()
+            validate_prompt(version.prompt, version.model)
+            articles = await dr.get_recent_missing_importance_articles(days, until)
+            requests = [
+                (a.entry_id, request_payload(a, version.prompt, version.model))
+                for a in articles
+            ]
+            summary.update(
+                selected=len(requests),
+                importance_prompt_id=version.id,
+                model=version.model,
+            )
+            for entry_id, payload in requests:
+                if await dr.has_entry_importance(entry_id):
+                    summary["skipped"] += 1
+                    continue
+                result = await asyncio.to_thread(
+                    call_jev, payload, config.JEV_KEY, usage
+                )
+                stored = await dr.insert_entry_importance(entry_id, version.id, result)
+                summary["stored" if stored else "skipped"] += 1
+                print(
+                    json.dumps(
+                        {
+                            "entry_id": entry_id,
+                            "importance_prompt_id": version.id,
+                            **result.model_dump(mode="json"),
+                            "stored": stored,
+                        },
+                        allow_nan=False,
+                    ),
+                    flush=True,
+                )
+            summary["status"] = "complete"
+    finally:
+        summary.update(usage)
+        summary["elapsed_seconds"] = time.monotonic() - started
+        summary["estimated_cost_usd"] = (
+            usage["input_tokens"] * INPUT_USD_PER_MILLION / 1_000_000
+        )
+        summary["input_usd_per_million"] = INPUT_USD_PER_MILLION
+        summary["usage_complete"] = (
+            usage["requests"] == usage["responses"]
+            and usage["missing_input_tokens"] == 0
+            and usage["missing_output_tokens"] == 0
+        )
+        print(json.dumps(summary, allow_nan=False), flush=True)
+
+
 async def run(args: argparse.Namespace) -> None:
     """Run one explicit command and close the database pool on every exit."""
     prompt: dict[str, Any] = {}
@@ -204,6 +316,8 @@ async def run(args: argparse.Namespace) -> None:
             print(
                 json.dumps({"importance_prompt_id": version.id, "model": version.model})
             )
+        elif args.command == "infer-recent":
+            await infer_recent(args.days)
         else:
             results = await infer(args.entry_id)
             for result in results:
@@ -223,6 +337,10 @@ def main() -> None:
         "infer", help="Classify only the supplied article IDs"
     )
     inference.add_argument("--entry-id", type=int, action="append", required=True)
+    recent = commands.add_parser(
+        "infer-recent", help="Classify recent articles without any importance record"
+    )
+    recent.add_argument("--days", type=int, required=True)
     args = parser.parse_args()
     init_logging(config.LOGGING_CONFIG)
     asyncio.run(run(args))
