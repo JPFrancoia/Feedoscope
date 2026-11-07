@@ -1,0 +1,152 @@
+[
+  {
+    "id": "reusable_method",
+    "group": "base",
+    "question": "Does this article explain a reusable engineering method?",
+    "criteria": "The text explains a method that a reader can apply beyond this specific event."
+  },
+  {
+    "id": "capability_change",
+    "group": "base",
+    "question": "Does this article introduce a meaningful capability or access change?",
+    "criteria": "The text identifies a concrete change in what people can do or access, not merely a new version number."
+  },
+  {
+    "id": "practical_use",
+    "group": "base",
+    "question": "Does this article provide something practical to use?",
+    "criteria": "The text supplies a usable tool, procedure, resource, or specific actionable lesson."
+  },
+  {
+    "id": "substantial_analysis",
+    "group": "base",
+    "question": "Does this article contain substantial evidence or analysis?",
+    "criteria": "The text develops supported reasoning or examines evidence beyond a brief assertion or news summary."
+  },
+  {
+    "id": "routine_announcement",
+    "group": "base",
+    "question": "Is this article mainly a routine announcement?",
+    "criteria": "The main contribution is reporting a routine release, event, or organizational update without a substantial new capability or analysis."
+  },
+  {
+    "id": "mechanism",
+    "group": "depth",
+    "question": "Does the author explain the underlying mechanism, rather than only describe the result?",
+    "criteria": "The text explains how or why a process produces its result."
+  },
+  {
+    "id": "assumptions",
+    "group": "depth",
+    "question": "Does the author identify assumptions that the explanation depends on?",
+    "criteria": "The text states a premise or condition required for the explanation or recommendation."
+  },
+  {
+    "id": "tradeoffs",
+    "group": "depth",
+    "question": "Does the author explain why one approach works better than an alternative?",
+    "criteria": "The text compares alternatives and explains the relevant trade-off, not just a preference."
+  },
+  {
+    "id": "failure_conditions",
+    "group": "depth",
+    "question": "Does the author identify conditions where the approach fails?",
+    "criteria": "The text gives a specific limit, failure mode, or counterexample."
+  },
+  {
+    "id": "nonobvious_consequence",
+    "group": "depth",
+    "question": "Does the author explain a consequence that a basic introduction usually misses?",
+    "criteria": "The text derives a non-obvious consequence and explains its cause. Do not reward jargon or obscure names alone."
+  },
+  {
+    "id": "firsthand",
+    "group": "experience",
+    "question": "Does the author describe firsthand experience with the subject?",
+    "criteria": "The text describes direct participation, observation, building, operation, or research by the author. This assesses the account, not verified identity."
+  },
+  {
+    "id": "experienced_decision",
+    "group": "experience",
+    "question": "Does the author explain a specific decision from firsthand experience?",
+    "criteria": "The text identifies a decision the author made during direct work and explains the reason."
+  },
+  {
+    "id": "real_constraints",
+    "group": "experience",
+    "question": "Does the author describe real constraints that affected the work?",
+    "criteria": "The text connects a concrete constraint such as scale, cost, time, compatibility, or reliability to actual work."
+  },
+  {
+    "id": "failed_attempt",
+    "group": "experience",
+    "question": "Does the author describe an unsuccessful attempt and explain the lesson?",
+    "criteria": "The text describes what did not work and what the author learned from that outcome."
+  },
+  {
+    "id": "experience_details",
+    "group": "experience",
+    "question": "Does the article contain concrete details that support claimed firsthand experience?",
+    "criteria": "The text supplies implementation details, measurements, operating conditions, or observed failures that support its experience claim. A biography or job title is not evidence."
+  },
+  {
+    "id": "claim_evidence",
+    "group": "reasoning",
+    "question": "Does the author provide evidence for the central claim?",
+    "criteria": "The text connects the central claim to specific observations, measurements, examples, or identifiable sources."
+  },
+  {
+    "id": "observation_vs_explanation",
+    "group": "reasoning",
+    "question": "Does the author separate observations from proposed explanations?",
+    "criteria": "The text distinguishes what was observed from an interpretation or hypothesis about why it happened."
+  },
+  {
+    "id": "counterargument",
+    "group": "reasoning",
+    "question": "Does the author address a credible argument against the central claim?",
+    "criteria": "The text presents a meaningful opposing explanation or objection and responds to it fairly."
+  },
+  {
+    "id": "bounded_conclusion",
+    "group": "reasoning",
+    "question": "Does the author limit conclusions to what the supplied evidence supports?",
+    "criteria": "The text qualifies the scope of its conclusions according to its evidence. Assess the reasoning, not external factual truth."
+  },
+  {
+    "id": "uncertainty",
+    "group": "reasoning",
+    "question": "Does the author explain what remains uncertain?",
+    "criteria": "The text identifies a specific unknown, measurement limit, or unanswered question."
+  },
+  {
+    "id": "existing_methods",
+    "group": "field",
+    "question": "Does the author place the work in the context of existing methods?",
+    "criteria": "The text explains how the work relates to established methods or earlier results, beyond listing names."
+  },
+  {
+    "id": "difference_from_prior",
+    "group": "field",
+    "question": "Does the author explain a meaningful difference from previous work?",
+    "criteria": "The text explains a specific difference and why it matters, not merely a novelty claim."
+  },
+  {
+    "id": "misconception",
+    "group": "field",
+    "question": "Does the author identify a common misconception and explain the correction?",
+    "criteria": "The text explains why a plausible or common belief is mistaken and supplies a reason or example."
+  },
+  {
+    "id": "alternative_preferable",
+    "group": "field",
+    "question": "Does the author explain when an established alternative remains preferable?",
+    "criteria": "The text gives a concrete condition where an existing alternative is a better choice."
+  },
+  {
+    "id": "consistent_terms",
+    "group": "field",
+    "question": "Does the author use technical terms consistently with the explanation?",
+    "criteria": "The text contains enough technical explanation to judge internal consistency. Do not assume external correctness or expertise from vocabulary alone."
+  }
+]
